@@ -335,3 +335,27 @@ describe('single-file components', () => {
     expect(out.code!.match(/var __tzap=/g)).toHaveLength(2);
   });
 });
+
+describe('reductions', () => {
+  const src = 'export function f(a: number, t?: number) {\n  if (t !== undefined) clearTimeout(t);\n  return a > 1 && a < 9 ? a * 2 : a;\n}\n';
+  it('one-per-line keeps the most informative mutant on each line', () => {
+    const out = instrument({ file: 'a.ts', source: src, reduce: { onePerLine: true }, firstMutant: 0, firstSite: 0 });
+    const kept = out.mutants.filter((m) => !m.ignoredBy);
+    expect(new Set(kept.map((m) => m.location.start.line)).size).toBe(kept.length);
+    expect(kept.find((m) => m.location.start.line === 3)?.mutatorName).toBe('ConditionalExpression');
+    expect(out.mutants.filter((m) => m.ignoredBy === 'one-per-line').length).toBeGreaterThan(0);
+  });
+  it('equivalence drops mutants that compile to another mutant or to the original', () => {
+    const out = instrument({ file: 'a.ts', source: src, reduce: { equivalence: true }, firstMutant: 0, firstSite: 0 });
+    // `if (false) clearTimeout(t)` is the same program as removing the call.
+    const dup = out.mutants.filter((m) => m.ignoredBy === 'duplicate');
+    expect(dup.map((m) => `${m.location.start.line} ${m.mutatorName}`)).toContain('2 CallExpression');
+    // Nothing else is merged: every other mutant compiles to a distinct program.
+    expect(out.mutants.filter((m) => m.ignoredBy === 'equivalent')).toEqual([]);
+  });
+  it('FunctionBody is outside the default set and empties whole functions', () => {
+    expect(instrument({ file: 'a.ts', source: src, firstMutant: 0, firstSite: 0 }).mutants.some((m) => m.mutatorName === 'FunctionBody')).toBe(false);
+    const out = instrument({ file: 'a.ts', source: `${src}const g = (x: number) => x + 1;\n`, mutators: ['FunctionBody'], firstMutant: 0, firstSite: 0 });
+    expect(out.mutants.map((m) => `${m.location.start.line} ${m.replacement}`)).toEqual(['1 {}', '5 () => undefined']);
+  });
+});

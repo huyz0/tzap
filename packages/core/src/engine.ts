@@ -25,6 +25,8 @@ export interface EngineOptions {
   /** Enabled mutator names; default all. */
   mutators?: readonly string[];
   filters?: ReadonlyArray<{ name: string; filter: MutantFilter }>;
+  /** Opt-in reductions: see InstrumentInput.reduce. */
+  reduce?: { onePerLine?: boolean; equivalence?: boolean };
   /** Changed lines per root-relative file. Undefined: everything is in scope. Files absent from the map are out of scope. */
   lines?: ReadonlyMap<string, readonly LineRange[]>;
   /** Runner factories by runner kind. */
@@ -141,6 +143,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         mutators: options.mutators,
         lines,
         filters: options.filters,
+        reduce: options.reduce,
         firstMutant: nextMutant,
         firstSite: nextSite,
       });
@@ -199,7 +202,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         engine: options.engine ?? 'warm',
         typecheck: options.typecheck?.mode ?? 'off',
         mutators: options.mutators ? [...options.mutators] : ['all'],
-        filters: (options.filters ?? []).map((f) => f.name),
+        filters: [...(options.filters ?? []).map((f) => f.name), ...(options.reduce?.onePerLine ? ['one-per-line'] : []), ...(options.reduce?.equivalence ? ['equivalence'] : [])],
         scope: options.lines ? 'diff' : 'full',
       },
       timings: timer.timings,

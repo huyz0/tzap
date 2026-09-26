@@ -520,6 +520,33 @@ export const updateOperator: Mutator = {
   },
 };
 
+// --- FunctionBody (extreme mutation, not in the default set) ---------------------------------
+
+/**
+ * Descartes-style extreme mutation: a whole function body is removed, so the function returns
+ * undefined. One mutant per function instead of one per operator: far fewer, each a much larger
+ * change, answering "is this function tested at all" rather than "is this expression tested
+ * precisely". Selected with --mutators FunctionBody (or --extreme).
+ */
+export const functionBody: Mutator = {
+  name: 'FunctionBody',
+  mutate(node, ctx) {
+    if (node.type === 'ArrowFunctionExpression') {
+      const body = node.body as Node;
+      if (body.type === 'BlockStatement' || node.expression === false || isIdentifier(body, 'undefined')) return [];
+      return [{ replacement: '() => undefined', placement: 'arrow-body' }];
+    }
+    const p = ctx.parent;
+    const isFunction = !!p && (p.type === 'FunctionDeclaration' || p.type === 'FunctionExpression' || p.type === 'ArrowFunctionExpression');
+    if (isFunction && node.type === 'BlockStatement' && (p!.body as Node) === node) {
+      const statements = (node.body as Node[]).filter((s) => !(s.type === 'ExpressionStatement' && typeof s.directive === 'string'));
+      if (statements.length === 0 || isInvalidConstructorBody(node, ctx)) return [];
+      return [{ replacement: '{}', placement: 'block' }];
+    }
+    return [];
+  },
+};
+
 /** Stryker 10's set, in Stryker's order, under Stryker's names, so inventories compare mutant for mutant. */
 export const ALL_MUTATORS: readonly Mutator[] = [
   arithmeticOperator,
@@ -542,3 +569,6 @@ export const ALL_MUTATORS: readonly Mutator[] = [
 ];
 
 export const MUTATOR_NAMES: readonly string[] = ALL_MUTATORS.map((m) => m.name);
+
+/** Mutators outside the default set, selected by name. */
+export const EXTRA_MUTATORS: readonly Mutator[] = [functionBody];

@@ -4,8 +4,9 @@ import type { MutantDescriptor } from '@tzap/model';
 import { RUNTIME_GLOBAL, runtimeHeader } from '@tzap/runtime';
 import { type Node, children, FUNCTION_TYPES, isIdentifier, isNode, isSkipped, LOOP_TYPES } from './ast.js';
 import { Directives } from './directives.js';
-import { ALL_MUTATORS, forTestOffset, type Mutator, type Placement } from './mutators.js';
+import { ALL_MUTATORS, EXTRA_MUTATORS, forTestOffset, type Mutator, type Placement } from './mutators.js';
 import { parse } from './parse.js';
+import { compiledForm } from './equivalence.js';
 import { isSfc, sfcScripts, type SfcScripts } from './sfc.js';
 import { LineIndex } from './text.js';
 
@@ -32,6 +33,14 @@ export interface InstrumentInput {
   /** First mutant number and first site number to allocate; numbers are unique across a run. */
   firstMutant: number;
   firstSite: number;
+  /**
+   * Reductions, all off by default because each one stops reporting some real gaps; see
+   * docs/mutators.md for what each costs.
+   * - onePerLine: keep one mutant per source line (Google's practice).
+   * - equivalence: drop mutants whose program minifies to the original's, and all but one of
+   *   mutants that minify to the same program (trivial compiler equivalence).
+   */
+  reduce?: { onePerLine?: boolean; equivalence?: boolean };
 }
 
 export interface InstrumentOutput {
@@ -59,6 +68,7 @@ interface Candidate {
   /** For `expression`/`arrow-body` placement: the text of `target` with this mutant applied. */
   targetText?: string;
   voidPrefix?: boolean;
+  ancestors?: Node[];
 }
 
 const EXPRESSION_TYPES = new Set([
@@ -205,7 +215,7 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
   const lines = new LineIndex(source);
   const directives = new Directives(parsed.comments, source, lines);
   const enabled = input.mutators ? new Set(input.mutators) : undefined;
-  const mutators: Mutator[] = ALL_MUTATORS.filter((m) => !enabled || enabled.has(m.name));
+  const mutators: Mutator[] = [...ALL_MUTATORS, ...EXTRA_MUTATORS].filter((m) => (enabled ? enabled.has(m.name) : ALL_MUTATORS.includes(m)));
   const ranges = input.lines;
 
   const overlaps = (n: Node) => {
@@ -315,7 +325,7 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
               }
             }
           }
-          if (c.ignoredBy === undefined) place(c, ancestors.slice());
+          if (c.ignoredBy === undefined) c.ancestors = ancestors.slice();
           candidates.push(c);
         }
       }
@@ -342,6 +352,14 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
     }
   };
   visit(parsed.program);
+
+  const live0 = candidates.filter((c) => !c.removed && c.ignoredBy === undefined);
+  if (input.reduce?.equivalence) reduceEquivalent(live0, source, file);
+  if (input.reduce?.onePerLine) reduceOnePerLine(live0.filter((c) => c.ignoredBy === undefined), lines);
+  for (const c of candidates) {
+    if (!c.removed && c.ignoredBy === undefined) place(c, c.ancestors!);
+    c.ancestors = undefined;
+  }
 
   // Number mutants and build descriptors.
   let nextMutant = input.firstMutant;
@@ -505,4 +523,80 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
   const code = s.toString();
   const map = s.generateMap({ hires: 'boundary', source: file, includeContent: true });
   return { code, map, mutants: descriptors, nextMutant, nextSite, errors };
+}
+
+/** Mutators in the order one-per-line prefers them: those that most often reveal a missing assertion first. */
+const LINE_PRIORITY = [
+  'ConditionalExpression',
+  'EqualityOperator',
+  'LogicalOperator',
+  'ArithmeticOperator',
+  'MethodExpression',
+  'OptionalChaining',
+  'BooleanLiteral',
+  'UnaryOperator',
+  'UpdateOperator',
+  'AssignmentOperator',
+  'ArrowFunction',
+  'CallExpression',
+  'BlockStatement',
+  'ObjectLiteral',
+  'ArrayDeclaration',
+  'Regex',
+  'StringLiteral',
+];
+
+function reduceOnePerLine(live: Candidate[], lines: LineIndex): void {
+  const best = new Map<number, Candidate>();
+  const rank = (c: Candidate) => {
+    const i = LINE_PRIORITY.indexOf(c.mutatorName);
+    return i === -1 ? LINE_PRIORITY.length : i;
+  };
+  for (const c of live) {
+    const line = lines.line(c.node.start);
+    const cur = best.get(line);
+    if (!cur || rank(c) < rank(cur)) best.set(line, c);
+  }
+  const keep = new Set(best.values());
+  for (const c of live) {
+    if (keep.has(c)) continue;
+    c.ignoredBy = 'one-per-line';
+    c.statusReason = 'one mutant per line';
+  }
+}
+
+/** The file as it runs with this mutant applied, for comparing compiled forms. */
+function applied(source: string, c: Candidate): string {
+  if (c.placement === 'arrow-body') {
+    const body = c.node.body as Node;
+    return source.slice(0, body.start) + 'undefined' + source.slice(body.end);
+  }
+  if (c.placement === 'switch-case') {
+    const cons = c.node.consequent as Node[];
+    return source.slice(0, cons[0]!.start) + source.slice(cons[cons.length - 1]!.end);
+  }
+  return source.slice(0, c.node.start) + c.replacement + source.slice(c.node.end);
+}
+
+function reduceEquivalent(live: Candidate[], source: string, file: string): void {
+  const normalise = compiledForm(file);
+  const original = normalise(source);
+  if (original === undefined) return;
+  const seen = new Map<string, Candidate>();
+  for (const c of live) {
+    const form = normalise(applied(source, c));
+    if (form === undefined) continue;
+    if (form === original) {
+      c.ignoredBy = 'equivalent';
+      c.statusReason = 'compiles to the same program as the original';
+      continue;
+    }
+    const twin = seen.get(form);
+    if (twin) {
+      c.ignoredBy = 'duplicate';
+      c.statusReason = `compiles to the same program as another mutant (${twin.mutatorName} replacing ${truncate(source.slice(twin.node.start, twin.node.end).replace(/s+/g, ' '))})`;
+      continue;
+    }
+    seen.set(form, c);
+  }
 }

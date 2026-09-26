@@ -16,7 +16,7 @@ import { parseArgs } from 'node:util';
 import { analyse, type EngineEvent } from '@tzap/core';
 import { discover } from '@tzap/discover';
 import { gitChangedLines, parseUnifiedDiff, type ChangedLines, type LineRange } from '@tzap/git';
-import { ALL_MUTATORS, aridFilters, instrument } from '@tzap/instrument';
+import { ALL_MUTATORS, EXTRA_MUTATORS, aridFilters, instrument } from '@tzap/instrument';
 import { ModelValidationError, parseModel, score, serialiseModel, type ProjectModel, type ScopeSpec } from '@tzap/model';
 import { reporters as reporterRegistry, writeReports } from '@tzap/report';
 
@@ -46,6 +46,9 @@ const RUN_OPTIONS = {
   concurrency: { type: 'string' },
   'cache-dir': { type: 'string' },
   'no-arid': { type: 'boolean' },
+  'one-per-line': { type: 'boolean' },
+  dedup: { type: 'boolean' },
+  extreme: { type: 'boolean' },
   'dry-run': { type: 'boolean' },
   quiet: { type: 'boolean', short: 'q' },
   filter: { type: 'string' },
@@ -77,6 +80,9 @@ Run options:
       --workers N               worker count for the test runner's pool
       --cache-dir DIR           reuse verdicts that are provably still valid
       --no-arid                 also mutate logging and similar code (arid rules are on by default)
+      --one-per-line            keep one mutant per line (faster; stops reporting some gaps)
+      --dedup                   drop mutants that compile to the original or to each other
+      --extreme                 one mutant per function: its body removed (Descartes-style)
       --dry-run                 print what would be analysed, and stop
   -q, --quiet                   no progress output
 
@@ -173,9 +179,9 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
     process.stderr.write(`tzap: scope: ${changed.description}\n`);
     process.stderr.write('tzap: the range only selects what to analyse; the analysis runs against the working tree\n');
   }
-  const mutators = list(values.mutators as string | undefined);
+  const mutators = values.extreme ? ['FunctionBody'] : list(values.mutators as string | undefined);
   if (mutators) {
-    const known = new Set(ALL_MUTATORS.map((m) => m.name));
+    const known = new Set([...ALL_MUTATORS, ...EXTRA_MUTATORS].map((m) => m.name));
     const unknown = mutators.filter((m) => !known.has(m));
     if (unknown.length) throw new UsageError(`--mutators: unknown ${unknown.join(', ')}; known: ${[...known].join(', ')}`);
   }
@@ -210,6 +216,7 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
     engine,
     mutators,
     filters,
+    reduce: { onePerLine: values['one-per-line'] === true, equivalence: values.dedup === true },
     lines: changed?.files,
     runners: { vitest: createVitestSession },
     workers,

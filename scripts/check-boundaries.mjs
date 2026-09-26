@@ -16,7 +16,7 @@ const RULES = {
   model: { allow: [] },
   runtime: { allow: [], noBuiltins: true },
   protocol: { allow: ['@tzap/model'] },
-  instrument: { allow: ['@tzap/model', '@tzap/runtime', 'oxc-parser', 'magic-string', 'weapon-regex'] },
+  instrument: { allow: ['@tzap/model', '@tzap/runtime', 'oxc-parser', 'oxc-minify', 'oxc-transform', 'magic-string', 'weapon-regex'] },
   core: { allow: ['@tzap/model', '@tzap/protocol', '@tzap/instrument', 'tinyglobby', 'oxc-parser'] },
   git: { allow: ['@tzap/model'] },
   report: { allow: ['@tzap/model', 'mutation-testing-elements'] },

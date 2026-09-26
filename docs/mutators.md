@@ -93,3 +93,25 @@ on 99 of 100 sampled cases, and logging noise is the most-discussed complaint ab
 A mutant that does not type-check — `a?.b` becoming `a.b` on a possibly-undefined `a` — is not a
 gap in the tests: the type checker already rules it out. On strict TypeScript, about 29% of
 Stryker's mutants are like this. See [status.md](status.md) for tzap's `--typecheck` support.
+
+## Reductions: fewer mutants, at a stated price
+
+All off by default. Each makes a run faster by not reporting some real gaps, so each is reported
+with what it costs, never with its speed alone. Measured on `fixtures/hazards-vitest` (57
+mutants, 6 genuine survivors); `tools/bench` measures them on the larger benchmark fixture.
+
+| Flag | What it does | Mutants run | Survivors still reported |
+|---|---|---:|---:|
+| (none) | the full set | 57 | 6 |
+| `--dedup` | drops mutants whose file compiles (oxc transform + minify, names unmangled) to the original program, or to another mutant's | 55 | 6 |
+| `--one-per-line` | keeps one mutant per line, preferring comparisons and conditions (Google's practice) | 29 | **3** |
+| `--extreme` | one mutant per function: its body removed ([Descartes](https://github.com/STAMP-project/pitest-descartes)-style) | 11 | 0 |
+
+- **`--dedup` costs nothing in detection by construction**: what it drops cannot be killed, or is
+  killed exactly when its twin is. Both mutants it dropped here were real duplicates:
+  `if (false) clearTimeout(t)` is the same program as removing the `clearTimeout` call. It costs
+  a transform and a minify of the file per mutant.
+- **`--one-per-line` stopped reporting half the gaps here.** jzap measured 34% on its benchmark.
+  Google adopted it at a scale where that trade is defensible; state the number before choosing it.
+- **`--extreme` answers a different question** — is this function tested at all — and found no
+  untested function in a fixture whose gaps are all in *what* functions compute.

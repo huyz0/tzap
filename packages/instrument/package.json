@@ -18,7 +18,9 @@
     "@tzap/model": "workspace:*",
     "@tzap/runtime": "workspace:*",
     "magic-string": "1.4.2",
+    "oxc-minify": "0.151.0",
     "oxc-parser": "0.151.0",
+    "oxc-transform": "0.151.0",
     "weapon-regex": "2.0.5"
   }
 }
