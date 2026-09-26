@@ -284,6 +284,36 @@ describe.each(FIXTURES)('Jest $major', ({ name, major }) => {
     }, 60_000);
   });
 
+  describe('JestSession coverage repeats', () => {
+    const dir = path.join(FIXTURE, `tzap-repeat-${process.pid}`);
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    it('repeats a test only when its first run reached a mutant', async () => {
+      mkdirSync(path.join(dir, 'test'), { recursive: true });
+      // Both fail when run a second time; only the one that reaches a mutant is repeated.
+      writeFileSync(
+        path.join(dir, 'test/repeat.test.ts'),
+        `import { isFree } from '../../src/discount';\n` +
+          `const runs: Record<string, number> = {};\n` +
+          `const once = (k: string) => { runs[k] = (runs[k] ?? 0) + 1; expect(runs[k]).toBe(1); };\n` +
+          `test('reaches a mutant once', () => { expect(isFree(0)).toBe(true); once('a'); });\n` +
+          `test('reaches no mutant once', () => { once('b'); });\n`,
+      );
+      writeFileSync(path.join(dir, 'babel.config.cjs'), `module.exports = require('../babel.config.cjs');\n`);
+      const config = path.join(dir, 'jest.config.json');
+      writeFileSync(config, JSON.stringify({ rootDir: '.', testMatch: ['<rootDir>/test/**/*.test.ts'], testEnvironment: 'node' }));
+      const s = await open({
+        pkg: { id: name, root: '.', sources: ['src/**/*.ts'], runner: { kind: 'jest', config: slash(path.relative(FIXTURE, config)) } },
+      });
+      const res = await s.run({ id: 1, mode: 'coverage' });
+      expect(res.tests.map((t) => [t.name, t.state, t.stateSensitive])).toEqual([
+        ['reaches a mutant once', 'pass', expect.stringMatching(/^fails when repeated/)],
+        ['reaches no mutant once', 'pass', undefined],
+      ]);
+      await s.close();
+    }, 60_000);
+  });
+
   describe('JestSession state-sensitive tests', () => {
     it('coverage runs each test twice and flags one that takes another path when repeated', async () => {
       const file = path.join(scratch, 'stateful.json');

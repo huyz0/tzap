@@ -179,6 +179,8 @@ interface TestInfo extends Registered {
   hits2?: Array<[number, number]>;
   loops?: number;
   repeatFail?: string;
+  /** Coverage: the first run passed and reached no mutant, so the second is skipped (as in runner-vitest). */
+  noRepeat?: boolean;
   outcomes: Array<[number, TryOutcome, string?]>;
 }
 
@@ -613,6 +615,8 @@ export class Executor {
     if (copy.index >= copy.total) return; // a retry the user asked for inside the test: not a try
     st.current = copy;
     if (st.mode === 'coverage') {
+      // The repeat of a test that reached no mutant decides nothing: neither hooks nor body run.
+      if (copy.index > 0 && copy.info.noRepeat) copy.skipped = true;
       this.o.onProgress?.(st.req.id, copy.info.id, -1, false);
       this.collectOutside();
       endTry(this.rt);
@@ -680,6 +684,9 @@ export class Executor {
         // A test that skipped itself (`this.skip()`) decides nothing.
         info.state = failed ? 'fail' : t.isPending() ? 'skip' : 'pass';
         if (failed) info.message = message;
+        if (info.state === 'pass' && hits.length === 0) info.noRepeat = true;
+      } else if (copy.skipped) {
+        // Not repeated.
       } else {
         info.hits2 = hits;
         // Passed once, failed when repeated: the test is not repeatable. Not a red test.

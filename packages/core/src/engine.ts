@@ -835,37 +835,63 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         pkgId: string;
         assign: Map<string, Item>;
       }
-      const jobs: Job[] = [];
-      for (const pkg of runnerPackages) {
-        const parts = items.filter((it) => (it.files.get(pkg.id)?.size ?? 0) > 0);
-        const packs = !fresh && staticPerFile.has(pkg.id);
-        const open: Job[] = [];
-        for (const it of parts) {
-          const fs = it.files.get(pkg.id)!;
-          let job = packs ? open.find((j) => ![...fs].some((f) => j.assign.has(f))) : undefined;
-          if (!job) {
-            job = { pkgId: pkg.id, assign: new Map() };
-            open.push(job);
+      type Parts = Array<{ it: Item; files: Map<string, Set<string>> }>;
+      const buildJobs = (parts: Parts): Job[] => {
+        const jobs: Job[] = [];
+        for (const pkg of runnerPackages) {
+          const mine = parts.filter((p) => (p.files.get(pkg.id)?.size ?? 0) > 0);
+          const packs = !fresh && staticPerFile.has(pkg.id);
+          const open: Job[] = [];
+          for (const { it, files } of mine) {
+            const fs = files.get(pkg.id)!;
+            let job = packs ? open.find((j) => ![...fs].some((f) => j.assign.has(f))) : undefined;
+            if (!job) {
+              job = { pkgId: pkg.id, assign: new Map() };
+              open.push(job);
+            }
+            for (const f of fs) job.assign.set(f, it);
           }
-          for (const f of fs) job.assign.set(f, it);
+          jobs.push(...open);
         }
-        jobs.push(...open);
-      }
-
-      const cores = os.availableParallelism();
-      // The first lane reuses the warm session when that already isolates files.
-      // A run keeps about one worker busy per test file it holds, so the lanes that fill the
-      // machine are the cores over the average files per run: few when runs are wide, more when
-      // each run holds a file or two. Another lane costs a runner boot, so there is one only for
-      // every six runs, and never more than half the cores.
-      const autoLanes = () => {
-        const avgFiles = jobs.reduce((a, j) => a + j.assign.size, 0) / Math.max(1, jobs.length);
-        return Math.max(1, Math.min(Math.round(cores / Math.max(1, avgFiles)), Math.floor(cores / 2), Math.ceil(jobs.length / 6)));
+        return jobs;
       };
-      const lanes = fresh
-        ? Math.max(1, options.concurrency ?? 1)
-        : Math.max(1, options.concurrency ?? autoLanes());
-      const workersPerSession = Math.max(1, Math.floor(cores / lanes));
+
+      /**
+       * A static mutant is live in every file that loads its module, and any one of them failing
+       * kills it; most static mutants break loading outright. So in a warm run each is first tried
+       * in one file, its likeliest killer, and only the survivors in the rest. Different mutants
+       * take different files where they can, so the first pass packs into few runs; the second
+       * pass is the old single pass, for the survivors only. The reference engine keeps one pass.
+       */
+      const passes: Parts[] = [[], []];
+      {
+        const fileClass = new Map<string, number>();
+        for (const [k, ts] of testsByFile) fileClass.set(k, speedClass(ts.reduce((a, t) => a + (t.duration ?? 0), 0)));
+        const used = new Set<string>();
+        for (const it of items) {
+          const all = [...it.files].flatMap(([pkgId, fs]) => [...fs].map((f) => ({ pkgId, f, k: `${pkgId}\0${f}` })));
+          if (fresh || !it.isStatic || all.length < 2 || !all.every((x) => staticPerFile.has(x.pkgId))) {
+            passes[0]!.push({ it, files: it.files });
+            continue;
+          }
+          const inBody = new Set((siteTests.get(it.d.site) ?? []).map((t) => `${t.pkg}\0${normPath(path.resolve(root, t.file))}`));
+          const rank = (x: { k: string }) => [inBody.has(x.k) ? 0 : 1, fileClass.get(x.k) ?? 0] as const;
+          all.sort((a, b) => rank(a)[0] - rank(b)[0] || rank(a)[1] - rank(b)[1] || (a.k < b.k ? -1 : 1));
+          const first = all.find((x) => !used.has(x.k)) ?? all[0]!;
+          used.add(first.k);
+          const rest = new Map<string, Set<string>>();
+          for (const x of all) {
+            if (x === first) continue;
+            let set = rest.get(x.pkgId);
+            if (!set) rest.set(x.pkgId, (set = new Set()));
+            set.add(x.f);
+          }
+          passes[0]!.push({ it, files: new Map([[first.pkgId, new Set([first.f])]]) });
+          passes[1]!.push({ it, files: rest });
+        }
+      }
+      const jobs = buildJobs(passes[0]!);
+
 
       const runJob = async (job: Job, session: () => Promise<RunnerSession>, retire: () => void): Promise<void> => {
         // A mutant killed by an earlier job needs no more runs.
@@ -982,54 +1008,74 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       };
 
       const pkgById = new Map(runnerPackages.map((p) => [p.id, p]));
-      const queue = jobs.slice();
-      const lane = async (laneIndex: number) => {
-        const sessions = new Map<string, RunnerSession>();
-        try {
-          for (;;) {
-            const job = queue.shift();
-            if (!job) return;
-            const pkg = pkgById.get(job.pkgId)!;
-            const reuseWarm = !fresh && laneIndex === 0 && isolatesFiles.has(job.pkgId);
-            const session = async () => {
-              if (reuseWarm) {
-                let w = warm.get(job.pkgId);
-                if (!w) {
-                  w = sessionFor(pkg);
-                  await w.start();
-                  warm.set(job.pkgId, w);
+      const runJobs = async (jobs: Job[]) => {
+        const cores = os.availableParallelism();
+        // The first lane reuses the warm session when that already isolates files.
+        // A run keeps about one worker busy per test file it holds, so the lanes that fill the
+        // machine are the cores over the average files per run: few when runs are wide, more when
+        // each run holds a file or two. Another lane costs a runner boot, so there is one only for
+        // every six runs, and never more than half the cores.
+        const autoLanes = (jobs: Job[]) => {
+          const avgFiles = jobs.reduce((a, j) => a + j.assign.size, 0) / Math.max(1, jobs.length);
+          return Math.max(1, Math.min(Math.round(cores / Math.max(1, avgFiles)), Math.floor(cores / 2), Math.ceil(jobs.length / 6)));
+        };
+        const lanes = fresh
+          ? Math.max(1, options.concurrency ?? 1)
+          : Math.max(1, options.concurrency ?? autoLanes(jobs));
+        const workersPerSession = Math.max(1, Math.floor(cores / lanes));
+        const queue = jobs.slice();
+        const lane = async (laneIndex: number) => {
+          const sessions = new Map<string, RunnerSession>();
+          try {
+            for (;;) {
+              const job = queue.shift();
+              if (!job) return;
+              const pkg = pkgById.get(job.pkgId)!;
+              const reuseWarm = !fresh && laneIndex === 0 && isolatesFiles.has(job.pkgId);
+              const session = async () => {
+                if (reuseWarm) {
+                  let w = warm.get(job.pkgId);
+                  if (!w) {
+                    w = sessionFor(pkg);
+                    await w.start();
+                    warm.set(job.pkgId, w);
+                  }
+                  return w;
                 }
-                return w;
-              }
-              let s = sessions.get(job.pkgId);
-              if (!s) {
-                s = sessionFor(pkg, true, workersPerSession);
-                await s.start();
-                sessions.set(job.pkgId, s);
-              }
-              return s;
-            };
-            const retire = () => {
-              if (reuseWarm) warm.delete(job.pkgId);
-              sessions.delete(job.pkgId);
-            };
-            const tj = performance.now();
-            await runJob(job, session, retire);
-            if (process.env.TZAP_DEBUG) process.stderr.write(`tzap debug: lane ${laneIndex} job ${[...new Set(job.assign.values())].map((it) => `${it.d.num}${it.isStatic ? 's' : 'v'}:${it.killedBy ? 'K' : it.tested}/${it.planned}`).join(',')} files=${job.assign.size} ${Math.round(performance.now() - tj)} ms
+                let s = sessions.get(job.pkgId);
+                if (!s) {
+                  s = sessionFor(pkg, true, workersPerSession);
+                  await s.start();
+                  sessions.set(job.pkgId, s);
+                }
+                return s;
+              };
+              const retire = () => {
+                if (reuseWarm) warm.delete(job.pkgId);
+                sessions.delete(job.pkgId);
+              };
+              const tj = performance.now();
+              await runJob(job, session, retire);
+              if (process.env.TZAP_DEBUG) process.stderr.write(`tzap debug: lane ${laneIndex} job ${[...new Set(job.assign.values())].map((it) => `${it.d.num}${it.isStatic ? 's' : 'v'}:${it.killedBy ? 'K' : it.tested}/${it.planned}`).join(',')} files=${job.assign.size} ${Math.round(performance.now() - tj)} ms
 `);
-            if (fresh) {
-              await Promise.all([...sessions.values()].map((s) => s.close()));
-              sessions.clear();
+              if (fresh) {
+                await Promise.all([...sessions.values()].map((s) => s.close()));
+                sessions.clear();
+              }
             }
+          } finally {
+            await Promise.all([...sessions.values()].map((s) => s.close()));
           }
-        } finally {
-          await Promise.all([...sessions.values()].map((s) => s.close()));
-        }
-      };
-      const isoStart = performance.now();
-      await Promise.all(Array.from({ length: lanes }, (_, i) => lane(i)));
-      if (process.env.TZAP_DEBUG) process.stderr.write(`tzap debug: isolated ${items.length} mutants in ${jobs.length} runs on ${lanes} lanes, ${Math.round(performance.now() - isoStart)} ms; files per run ${jobs.map((j) => j.assign.size).join(",")}
+        };
+        const isoStart = performance.now();
+        await Promise.all(Array.from({ length: lanes }, (_, i) => lane(i)));
+        if (process.env.TZAP_DEBUG) process.stderr.write(`tzap debug: isolated ${items.length} mutants in ${jobs.length} runs on ${lanes} lanes, ${Math.round(performance.now() - isoStart)} ms; files per run ${jobs.map((j) => j.assign.size).join(",")}
 `);
+      };
+      await runJobs(jobs);
+      // The second pass: the static mutants the first did not kill, in the rest of their files.
+      const survivors = passes[1]!.filter((p) => !p.it.killedBy);
+      if (survivors.length > 0) await runJobs(buildJobs(survivors));
 
       for (const it of items) {
         const base: MutantResult = { ...it.d, status: 'Survived', coveredBy: [...it.coveredBy].sort(), testsCompleted: it.tested, ...(it.isStatic ? { static: true } : {}) };

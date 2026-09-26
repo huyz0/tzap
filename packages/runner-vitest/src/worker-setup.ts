@@ -173,11 +173,20 @@ export function setup(vitest: Vitest): void {
   });
 }
 
+/** Thrown into a coverage test's second run when the first reached no mutant. */
+const NO_REPEAT = 'tzap: not repeated, the first run reached no mutant';
+
 /**
  * Coverage runs every test twice in a row. The first run is the coverage; the second shows
  * whether the test behaves the same once the modules it uses are warm. A test whose second run
  * takes a different path, or fails, depends on state its first run left behind (a memo, a
  * counter, a cache), and the warm engine cannot trust mutant tries that such a test decides.
+ *
+ * A test whose first run passed and reached no mutant decides no warm try, whatever its second
+ * run would show: it is planned against no mutant, and static mutants are decided in fresh runs.
+ * Its second run is skipped the way a killed mutant's try is, by throwing from this (first)
+ * beforeEach, so neither the user's beforeEach hooks nor the body run. In a diff run most tests
+ * of the files that reach the change are such tests, and some are slow (real timers).
  */
 function setupCoverage(vitest: Vitest, rt: TzapRuntime): void {
   const outside = new Map<number, number>();
@@ -200,19 +209,28 @@ function setupCoverage(vitest: Vitest, rt: TzapRuntime): void {
     });
   });
   let started = 0;
-  vitest.beforeEach(() => {
+  vitest.beforeEach(({ task }) => {
+    if ((task.result?.repeatCount ?? 0) > 0 && task.meta.tzapNoRepeat === true) throw new Error(NO_REPEAT);
     collectOutside();
     endTry(rt);
     started = performance.now();
   });
   vitest.afterEach(({ task }) => {
     const rep = task.result?.repeatCount ?? 0;
+    if (rep > 0 && task.meta.tzapNoRepeat === true) {
+      if (task.result) {
+        task.result.state = 'pass';
+        task.result.errors = undefined;
+      }
+      return;
+    }
     const hits = drainHits(rt);
     if (rep === 0) {
       task.meta.tzapHits = hits;
       task.meta.tzapLoops = rt.l;
       task.meta.tzapDuration = performance.now() - started;
       if (task.result?.state === 'fail') task.meta.tzapRed = true;
+      else if (hits.length === 0 && task.fails !== true) task.meta.tzapNoRepeat = true;
     } else {
       task.meta.tzapHits2 = hits;
       if (task.result?.state === 'fail' && task.meta.tzapRed !== true) {

@@ -27,6 +27,8 @@ const runState = () => (globalThis as unknown as Record<StateKey, RunState | und
 
 /** Thrown into a try whose mutant was already killed in this run. */
 const SKIP = 'tzap: skipped, mutant already killed in this run';
+/** Thrown into a coverage repeat when the first run reached no mutant. */
+const NO_REPEAT = 'tzap: not repeated, the first run reached no mutant';
 /** Keeps a passing try "failed" so circus's retry loop runs the next one. */
 const NEXT = 'tzap: next try';
 
@@ -41,6 +43,7 @@ const WAIT_BEFORE_RETRY = Symbol.for('WAIT_BEFORE_RETRY');
  */
 const marker = (m: string) => Object.assign(new Error(m), { stack: m });
 const SKIP_ERROR = marker(SKIP);
+const NO_REPEAT_ERROR = marker(NO_REPEAT);
 const NEXT_ERROR = marker(NEXT);
 
 interface CircusTest {
@@ -82,6 +85,8 @@ interface Rec {
   loops?: number;
   red?: string;
   repeatFail?: string;
+  /** Coverage: the first run passed and reached no mutant, so the second is skipped (as in runner-vitest). */
+  noRepeat?: boolean;
 }
 
 type Env = new (...args: any[]) => {
@@ -203,6 +208,9 @@ function extend(Base: Env): Env {
         this.collectOutside();
         endTry(this.rt);
         rec.started = performance.now();
+        // The repeat of a test that reached no mutant decides nothing: an error before the hooks,
+        // so circus runs neither beforeEach nor the body.
+        if (i > 0 && rec.noRepeat) test.errors.push(NO_REPEAT_ERROR);
         return;
       }
       const tr = rec.plan[i];
@@ -232,6 +240,9 @@ function extend(Base: Env): Env {
           rec.loops = this.rt.l;
           rec.duration = performance.now() - rec.started;
           if (failed) rec.red = message(test.errors[0]);
+          else if (hits.length === 0) rec.noRepeat = true;
+        } else if (rec.noRepeat) {
+          // Not repeated.
         } else {
           rec.hits2 = hits;
           // Passed once, failed when repeated: the test is not repeatable. Not a red test.

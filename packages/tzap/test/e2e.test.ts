@@ -154,6 +154,27 @@ describe('the cache', () => {
   }, 180_000);
 });
 
+describe('coverage repeats', () => {
+  it('repeats a test only when its first run reached a mutant', async () => {
+    const root = path.join(scratch, 'sample-repeat');
+    cpSync(fixture('sample-vitest'), root, { recursive: true, filter: (s) => !s.includes('node_modules') });
+    // Both tests fail when run a second time. Only the one that reaches a mutant is repeated, so
+    // only it can be found to depend on what its first run left behind.
+    writeFileSync(
+      path.join(root, 'test/repeat.test.ts'),
+      "import { expect, it } from 'vitest';\nimport { isFree } from '../src/discount';\n" +
+        "const g = globalThis as { __runs?: Record<string, number> };\n" +
+        "const once = (k: string) => { g.__runs ??= {}; g.__runs[k] = (g.__runs[k] ?? 0) + 1; expect(g.__runs[k]).toBe(1); };\n" +
+        "it('reaches a mutant once', () => { expect(isFree(0)).toBe(true); once('a'); });\n" +
+        "it('reaches no mutant once', () => { once('b'); });\n",
+    );
+    const warnings: string[] = [];
+    await run(model(root), { onEvent: (e) => e.type === 'warning' && warnings.push(e.message) });
+    const repeated = warnings.find((w) => /behave differently when repeated/.test(w));
+    expect(repeated).toMatch(/^1 of \d+ tests behave differently when repeated.*\(reaches a mutant once\)/);
+  }, 120_000);
+});
+
 describe('worker threads', () => {
   it('falls back to the project pool when the baseline is not clean in threads, without changing a verdict', async () => {
     const root = path.join(scratch, 'sample-chdir');

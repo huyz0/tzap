@@ -134,6 +134,7 @@ function callerFile(): string | undefined {
 }
 
 const SKIP = 'tzap: skipped, mutant already killed in this run';
+const NO_REPEAT = 'tzap: not repeated, the first run reached no mutant';
 
 /** Calls a `before`/`after` hook as node:test would: a second parameter is a `done` callback. */
 function callHook(fn: Fn, t: Ctx): Promise<unknown> {
@@ -159,6 +160,8 @@ interface TestInfo {
   hits2?: Array<[number, number]>;
   loops?: number;
   repeatFail?: string;
+  /** Coverage: the first run passed and reached no mutant, so the second is skipped (as in runner-vitest). */
+  noRepeat?: boolean;
   outcomes: Array<[number, TryOutcome, string?]>;
 }
 
@@ -602,6 +605,11 @@ export class Executor {
       endTry(this.rt);
       copy.started = performance.now();
       if (st.beforeError !== undefined) throw st.beforeError;
+      // The repeat of a test that reached no mutant decides nothing: skipped, as a killed try is.
+      if (copy.index > 0 && copy.info.noRepeat) {
+        copy.skipped = true;
+        throw new Error(NO_REPEAT);
+      }
       return;
     }
     const tr = copy.info.tries![copy.index]!;
@@ -649,6 +657,9 @@ export class Executor {
         info.duration = elapsed;
         info.state = failed ? 'fail' : 'pass';
         if (failed) info.message = message;
+        else if (hits.length === 0) info.noRepeat = true;
+      } else if (copy.skipped) {
+        // Not repeated.
       } else {
         info.hits2 = hits;
         // Passed once, failed when repeated: the test is not repeatable. Not a red test.

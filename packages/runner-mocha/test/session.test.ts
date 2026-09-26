@@ -11,6 +11,7 @@ const here = import.meta.dirname;
 const repo = path.resolve(here, '../../..');
 const sample = path.join(repo, 'fixtures/sample-mocha');
 const hazards = path.join(here, '../fixtures/hazards');
+const repeat = path.join(here, '../fixtures/repeat');
 const mochaVersion = (JSON.parse(readFileSync(path.join(sample, 'node_modules/mocha/package.json'), 'utf8')) as { version: string }).version;
 
 interface Prepared {
@@ -321,5 +322,23 @@ describe('hazards', () => {
       [-1, 'S'],
       [-1, 'S'],
     ]);
+  });
+});
+
+describe('coverage repeats', () => {
+  it('repeats a test only when its first run reached a mutant', async () => {
+    const p = prepare(repeat, ['src/free.ts']);
+    const s = new MochaSession({ root: repeat, pkg: pkgOf(repeat), instrumented: p.instrumented, tmpDir: p.tmp });
+    await s.start();
+    try {
+      const res = await s.run({ id: 1, mode: 'coverage' });
+      expect(res.tests.map((t) => [t.name, t.state, t.stateSensitive])).toEqual([
+        ['reaches a mutant once', 'pass', expect.stringMatching(/^fails when repeated/)],
+        ['reaches no mutant once', 'pass', undefined],
+      ]);
+    } finally {
+      await s.close();
+      rmSync(p.tmp, { recursive: true, force: true });
+    }
   });
 });

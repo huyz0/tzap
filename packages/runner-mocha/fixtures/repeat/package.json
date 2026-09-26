@@ -1,0 +1,6 @@
+{
+  "name": "fixture-runner-mocha-repeat",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "mocha" }
+}
