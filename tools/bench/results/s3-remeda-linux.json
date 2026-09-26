@@ -5,13 +5,13 @@
     "cpu": "Intel(R) Xeon(R) Processor @ 2.10GHz",
     "logicalCpus": 4,
     "node": "v22.22.2",
-    "date": "2026-09-26T11:32:15.416Z",
-    "tzapCommit": "c3c2ca9"
+    "date": "2026-09-26T13:07:02.204Z",
+    "tzapCommit": "4597116"
   },
   "suite": {
     "files": "Test Files  174 passed (174)",
     "tests": "Tests  2226 passed | 10 expected fail | 1 todo (2237)",
-    "ms": 15518
+    "ms": 17828
   },
   "guard": {
     "changedLines": 10,
@@ -36,25 +36,25 @@
   "strykerProbe": [
     {
       "concurrency": 2,
-      "ms": 57348
+      "ms": 58815
     },
     {
       "concurrency": 4,
-      "ms": 47070
+      "ms": 46947
     }
   ],
   "tzap": {
-    "median": 18022,
-    "min": 17957,
-    "max": 18899,
+    "median": 14057,
+    "min": 13975,
+    "max": 14809,
     "runs": [
       {
-        "ms": 18022,
+        "ms": 14057,
         "phases": {
-          "coverage": 7728,
-          "execute": 5276,
-          "instrument": 33,
-          "isolated": 4714
+          "coverage": 5754,
+          "execute": 5412,
+          "instrument": 28,
+          "isolated": 2612
         },
         "inventory": 22,
         "tests": 572,
@@ -64,12 +64,12 @@
         }
       },
       {
-        "ms": 18899,
+        "ms": 14809,
         "phases": {
-          "coverage": 7886,
-          "execute": 5623,
-          "instrument": 31,
-          "isolated": 5095
+          "coverage": 6628,
+          "execute": 5453,
+          "instrument": 28,
+          "isolated": 2434
         },
         "inventory": 22,
         "tests": 572,
@@ -79,12 +79,12 @@
         }
       },
       {
-        "ms": 17957,
+        "ms": 13975,
         "phases": {
-          "coverage": 7773,
-          "execute": 5076,
-          "instrument": 25,
-          "isolated": 4841
+          "coverage": 5836,
+          "execute": 5278,
+          "instrument": 29,
+          "isolated": 2568
         },
         "inventory": 22,
         "tests": 572,
@@ -96,16 +96,16 @@
     ]
   },
   "stryker": {
-    "median": 47308,
-    "min": 46598,
-    "max": 47348,
+    "median": 47541,
+    "min": 47296,
+    "max": 47991,
     "runs": [
       {
-        "ms": 47348,
+        "ms": 47296,
         "phases": {
-          "beforeDryRun": 3116,
-          "dryRun": 12784,
-          "afterDryRun": 31449
+          "beforeDryRun": 3054,
+          "dryRun": 12812,
+          "afterDryRun": 31430
         },
         "inventory": 16,
         "verdicts": {
@@ -114,11 +114,11 @@
         }
       },
       {
-        "ms": 47308,
+        "ms": 47541,
         "phases": {
-          "beforeDryRun": 3252,
-          "dryRun": 12814,
-          "afterDryRun": 31243
+          "beforeDryRun": 3231,
+          "dryRun": 12903,
+          "afterDryRun": 31407
         },
         "inventory": 16,
         "verdicts": {
@@ -127,11 +127,11 @@
         }
       },
       {
-        "ms": 46598,
+        "ms": 47991,
         "phases": {
-          "beforeDryRun": 3185,
-          "dryRun": 12502,
-          "afterDryRun": 30912
+          "beforeDryRun": 3248,
+          "dryRun": 13069,
+          "afterDryRun": 31674
         },
         "inventory": 16,
         "verdicts": {
@@ -141,7 +141,7 @@
       }
     ]
   },
-  "ratio": 2.6,
+  "ratio": 3.4,
   "parity": {
     "shared": 16,
     "tzapOnly": 6,

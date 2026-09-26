@@ -110,7 +110,7 @@ Vitest package. The Jest runner and the frontend fixtures exist; the benchmark v
 | Scenario | Required | Measured | Verdict |
 |---|---|---:|---|
 | S1 full run | ≥ 3x | 7.1x | **met** |
-| S3 10-line diff | ≥ 10x | 4.5x (fixture), 2.6x (remeda) | **not met** |
+| S3 10-line diff | ≥ 10x | 4.5x (fixture), 3.4x (remeda) | **not met** |
 
 S3's criterion assumed a suite whose dry run is expensive — the cost StrykerJS pays for every
 diff and tzap narrows away. On the fixture StrykerJS's whole dry run takes 0.4 s, so there is
@@ -125,15 +125,28 @@ stride, five mutant-bearing lines in each), on remeda from the parity corpus wit
 runtime suite: 174 test files, 2,226 tests, 15.5 s under `vitest run`. Vitest 4.1.11, StrykerJS
 10.0.0 at concurrency 4 (faster than 2, one probe run each), `isolate: true` for both (StrykerJS
 needs it), type checking off for both; tzap 3 runs, StrykerJS 3, interleaved. Linux container,
-4 vCPU Xeon 2.1 GHz, Node 22.22, build `c3c2ca9`. Raw data:
+4 vCPU Xeon 2.1 GHz, Node 22.22, build `4597116`. Raw data:
 [tools/bench/results/s3-remeda-linux.json](../tools/bench/results/s3-remeda-linux.json), the
 patch: [S3-remeda.patch](../tools/bench/results/S3-remeda.patch).
 
 | | Median (min–max) | Phases (last run) | Mutants |
 |---|---:|---|---|
-| tzap `--patch` | 18.02 s (17.96–18.90) | coverage 7.8 s, warm 5.1 s, isolated 4.8 s | 22: 17 Killed, 5 Timeout |
-| StrykerJS `--mutate` ranges | 47.31 s (46.60–47.35) | startup 3.2 s, dry run 12.5 s, mutants 30.9 s | 16: 14 Killed, 2 Timeout |
-| **Ratio** | **2.6x** | | 16 shared; 1 Timeout/Killed disagreement |
+| tzap `--patch` | 14.06 s (13.97–14.81) | coverage 5.8 s, warm 5.3 s, isolated 2.6 s | 22: 17 Killed, 5 Timeout |
+| StrykerJS `--mutate` ranges | 47.54 s (47.30–47.99) | startup 3.2 s, dry run 13.1 s, mutants 31.7 s | 16: 14 Killed, 2 Timeout |
+| **Ratio** | **3.4x** | | 16 shared; 1 Timeout/Killed disagreement |
+
+The first measurement, at build `c3c2ca9`, was 18.02 s against 47.31 s (2.6x): coverage 7.8 s,
+warm 5.1 s, isolated 4.8 s. Two changes since, neither changing a verdict (S1 and S9 on the
+generated fixture measured the same before and after, verdict for verdict):
+
+- **Coverage repeats only tests that reached a mutant.** Every test runs twice in coverage, the
+  second time to find tests that depend on state their first run left behind; a test whose first
+  run reached no mutant decides no warm try, so it is no longer repeated. Here that is 502 of the
+  572 reaching tests, among them the real-timer debounce tests. Coverage is now within about a
+  second of plain `vitest run` on the same 19 files.
+- **Static mutants are tried in one file first.** Any file that loads the module kills a static
+  mutant when it fails, so each is first run in its likeliest file, different mutants packed onto
+  different files, and only survivors in the rest: remeda's five went from five runs to one.
 
 What it shows:
 
@@ -148,9 +161,13 @@ What it shows:
   loops that hang (`while (true)` with its body removed), which is where tzap's extra Timeouts
   come from. On the shared 16 alone the ratio would be higher; it is not quoted, because the
   timing covers all 22.
-- **What would move it:** the coverage pass (it runs every reaching test twice, to find tests
-  that depend on leftover state) and static mutants under `isolate: true`. A diff that avoids
-  hub files narrows far more; this one is what the fixed derivation produced.
+- **What is left.** Coverage (5.8 s) is the reaching tests' own time; any tool pays it once.
+  The warm rounds (5.3 s) are mostly unmutated tests that precede a planned test in its file:
+  they run in every round because a test may depend on what an earlier one left behind, and in
+  `randomBigInt.test.ts` ten 200 ms tests precede the planned ones. Skipping them is not sound
+  without knowing which tests are order-dependent, which static analysis of module state cannot
+  tell (tests also communicate through globals, timers and mocks). A diff that avoids hub files
+  narrows far more; this one is what the fixed derivation produced.
 
 ## What building it taught about speed
 

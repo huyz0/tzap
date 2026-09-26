@@ -104,10 +104,12 @@ better read as 6–7x.
 - **S3 ≥ 10x: not met**, on either suite. On the fixture (4.5x) StrykerJS's full dry run costs
   0.4 s, because its 200 tests take milliseconds: the cost the criterion targets barely exists,
   and tzap's fixed floor (a runner boot and a coverage pass) dominates. On remeda's real suite
-  (2,226 tests, 15.5 s) it is 2.6x — 18.0 s against 47.3 s — where the derived patch hit an
-  internal helper most of the library goes through, so the change reaches 572 tests and narrowing
-  saves little ([performance.md](performance.md#s3-on-a-real-suite-remeda)). The largest costs
-  left are the coverage pass running each reaching test twice and static mutants.
+  (2,226 tests, 15.5 s) it is 3.4x — 14.1 s against 47.5 s, up from 2.6x once coverage stopped
+  repeating tests that reach no mutant and static mutants were tried in one file first — where
+  the derived patch hit an internal helper most of the library goes through, so the change
+  reaches 572 tests and narrowing saves little
+  ([performance.md](performance.md#s3-on-a-real-suite-remeda)). What is left is mostly the
+  suite's own time.
 
 ## Measured and deliberately not built
 
