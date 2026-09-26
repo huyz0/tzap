@@ -83,24 +83,28 @@ on anything unlisted. See [tools/parity/reports/](../tools/parity/reports/) for 
 reports; the three tzap bugs it found (A1–A3) are fixed.
 
 **Speed** — `tools/bench`, a generated 40-module, 200-test Vitest package (1,495 mutants),
-Windows, median of 5 (tzap) and 3 (StrykerJS at its fastest concurrency), on a machine that was
-busy throughout, so ranges are wide. See [performance.md](performance.md).
+Windows, median of 5 (tzap) and 3 (StrykerJS at its fastest concurrency, 10), on a quiet
+machine. See [performance.md](performance.md).
 
 | Scenario | tzap | StrykerJS | Ratio |
 |---|---:|---:|---:|
-| S1 full run | 6.3 s | 39.4 s | **6.3x** |
-| S3 10-line diff | 1.8 s | 3.9 s | **2.2x** |
-| S5 re-run, nothing changed | 0.30 s | 7.4 s | 25x |
-| S9 static-heavy | see performance.md | 28.7 s | |
+| S1 full run | 8.18 s | 26.04 s | **3.2x** |
+| S3 10-line diff | 1.47 s | 4.87 s | **3.3x** |
+| S4 same diff, warm cache | 0.19 s | — | — |
+| S5 re-run, nothing changed | 0.29 s | 7.27 s | 24.9x |
+| S6 one-line change, warm cache | 2.98 s | 7.51 s | 2.5x |
+| S9 static-heavy | 18.84 s | 23.43 s | 1.2x |
 
 ## Kill criteria
 
-- **S1 ≥ 3x: met** (6.3x at identical inventory: 1,495 shared mutants, none unique to either tool).
-- **S3 ≥ 10x: not met** (2.2x). On this fixture StrykerJS's full dry run costs 0.4 s, because
+- **S1 ≥ 3x: met** (3.2x at identical inventory: 1,495 shared mutants, none unique to either
+  tool). The margin is thin: most of a full run is now fixed cost plus the isolated runs that
+  keep verdicts sound (static mutants, survivors whose tests can reach module state).
+- **S3 ≥ 10x: not met** (3.3x). On this fixture StrykerJS's full dry run costs 0.4 s, because
   its 200 tests take milliseconds; the cost the criterion targets barely exists, and tzap's own
-  fixed floor — a runner boot and a coverage pass, ~1.2 s — dominates. The criterion assumed a
-  suite whose dry run is expensive. It stays recorded as failed on the evidence available; a
-  diff run on a corpus project with a real suite is the measurement that would settle it.
+  fixed floor (a runner boot and a coverage pass) dominates. The criterion assumed a suite whose
+  dry run is expensive. It stays recorded as failed on the evidence available; a diff run on a
+  corpus project with a real suite is the measurement that would settle it.
 
 ## Measured and deliberately not built
 

@@ -48,9 +48,9 @@ Mutation score 75.7% (test strength 82.4%, ignoring uncovered mutants)
 - **An incremental cache** keyed on each test's import closure: nothing changed, no test runs.
 
 Measured on a generated 40-module package against StrykerJS 10 at its fastest setting:
-**6.5x faster on a full run, 25x on a re-run with nothing changed** — and, where tzap does not
-win by much, it says so: a 10-line diff on that package is only ~1.3x, because StrykerJS's dry
-run there costs 0.4 s. Every number, with its method, is in
+**3.2x faster on a full run, 25x on a re-run with nothing changed** — and, where tzap does not
+win by much, it says so: a 10-line diff is 3.3x (the plan's target was 10x), a static-heavy
+package 1.2x. Every number, with its method, is in
 [docs/performance.md](docs/performance.md).
 
 ## Why you can trust the verdicts
