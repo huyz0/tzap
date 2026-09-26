@@ -8,3 +8,4 @@ reports/
 .tzap-test-tmp/
 dist-npm/
 .claude/launch.json
+.claude/scheduled_tasks.lock

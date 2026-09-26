@@ -210,8 +210,7 @@ export class Executor {
   /** Sites per instrumented module (normalised path). */
   private readonly sitesOf = new Map<string, number[]>();
   private readonly shimDir: string;
-  private readonly shimMjs: string;
-  private readonly shimCjs: string;
+  private readonly shim: string;
   private readonly prelude: string;
   private readonly sentinel: string;
   /** The prelude and sentinel, as given and as resolved: both must re-evaluate every run. */
@@ -246,16 +245,18 @@ export class Executor {
 
     this.shimDir = o.dir;
     mkdirSync(this.shimDir, { recursive: true });
-    this.shimMjs = path.join(this.shimDir, 'node-test.mjs');
-    this.shimCjs = path.join(this.shimDir, 'node-test.cjs');
+    this.shim = path.join(this.shimDir, 'node-test.cjs');
     this.prelude = path.join(this.shimDir, 'prelude.mjs');
     this.sentinel = path.join(this.shimDir, 'sentinel.mjs');
     const names = Object.keys(real).filter((k) => /^[A-Za-z_$][\w$]*$/.test(k) && k !== 'default');
+    // One CommonJS shim for require() and import alike: `module.exports.x =` lines are what Node's
+    // CommonJS export detection sees, so `import { test }` works. Choosing a shim by the resolve
+    // conditions does not: Node 22.22 resolves a require() inside a CommonJS file that import()
+    // loaded with the import conditions, and that require() cannot load an ES module.
     writeFileSync(
-      this.shimMjs,
-      `const a = globalThis.__tzapNodeTest.api;\nexport default a;\n${names.map((k) => `export const ${k} = a.${k};`).join('\n')}\n`,
+      this.shim,
+      `const a = globalThis.__tzapNodeTest.api;\nmodule.exports = a;\n${names.map((k) => `module.exports.${k} = a.${k};`).join('\n')}\n`,
     );
-    writeFileSync(this.shimCjs, `module.exports = globalThis.__tzapNodeTest.api;\n`);
     writeFileSync(this.prelude, `globalThis.__tzapNodeTest.prelude();\n`);
     writeFileSync(this.sentinel, `globalThis.__tzapNodeTest.sentinel();\n`);
     this.synthetic = new Set([this.prelude, this.sentinel].flatMap((f) => [norm(f), norm(realPath(f))]));
@@ -284,8 +285,7 @@ export class Executor {
         if (specifier === 'node:test' && parent && !this.shimDirUrls.some((u) => parent.startsWith(u))) {
           const p = urlToNorm(parent);
           if (p && !this.reEval.has(p) && this.state) this.reEval.add(p);
-          const cjs = context.conditions?.includes('require') && !context.conditions.includes('import');
-          return { url: pathToFileURL(cjs ? this.shimCjs : this.shimMjs).href, format: cjs ? 'commonjs' : 'module', shortCircuit: true };
+          return { url: pathToFileURL(this.shim).href, format: 'commonjs', shortCircuit: true };
         }
         const r = next(specifier, context);
         if (!r.url.startsWith('file:')) return r;

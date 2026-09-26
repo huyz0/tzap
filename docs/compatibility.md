@@ -7,8 +7,8 @@ untested; a result from it should be checked against `--engine reference` before
 
 | | Tested | Notes |
 |---|---|---|
-| Node | 22.23, 24.21, 26.7 | `engines: >=22.12`. The node:test runner needs 22.15+ (`module.registerHooks`). Vitest, Jest and node:test fixtures give identical verdicts on all three |
-| OS | Windows 11 | Linux and macOS are in the CI matrix, not yet run |
+| Node | 22.22, 22.23, 24.21, 26.7 | `engines: >=22.12`. The node:test runner needs 22.15+ (`module.registerHooks`). Vitest, Jest and node:test fixtures give identical verdicts on all three |
+| OS | Windows 11, Linux, macOS | Linux and macOS through the CI matrix (Node 22, 24, 26 on each) |
 | Package managers | pnpm 11, npm 11 | yarn workspaces are discovered but not run end to end |
 
 ## Test runners
