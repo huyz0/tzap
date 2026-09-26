@@ -43,6 +43,12 @@ export interface EngineOptions {
    */
   unchanged?: { lookup(m: MutantDescriptor): MutantResult | undefined; tests: TestInfo[] };
   onEvent?: (e: EngineEvent) => void;
+  /**
+   * Type-checks mutants: returns, per mutant number, the first diagnostic for each mutant the
+   * checker rejects. `survivors` checks mutants the tests did not detect; `all` checks every
+   * placed mutant before any test runs, so type-invalid ones never run.
+   */
+  typecheck?: { mode: 'survivors' | 'all'; check: (mutants: readonly MutantDescriptor[], root: string) => Promise<Map<number, string>> };
   tzapVersion: string;
   tmpDir?: string;
 }
@@ -156,6 +162,17 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
   emit({ type: 'inventory', files: fileCount, mutants: descriptors.length, placed: placed.length });
 
   const results = new Map<number, MutantResult>();
+
+  // --typecheck=all: type-invalid mutants never run.
+  if (options.typecheck?.mode === 'all') {
+    timer.start('typecheck');
+    emit({ type: 'phase', phase: 'typecheck' });
+    const rejected = await options.typecheck.check(placed, root);
+    for (const d of placed) {
+      const diag = rejected.get(d.num);
+      if (diag !== undefined) results.set(d.num, { ...d, status: 'CompileError', statusReason: diag });
+    }
+  }
   const ignored: MutantResult[] = descriptors
     .filter((d) => d.num < 0)
     .map((d) => ({ ...d, status: 'Ignored' as const, statusReason: d.description ?? d.ignoredBy }));
@@ -179,13 +196,31 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       redTests: red.map((t) => ({ id: t.key, name: t.name, file: t.file, message: t.red ?? '' })),
       config: {
         engine: options.engine ?? 'warm',
-        typecheck: 'off',
+        typecheck: options.typecheck?.mode ?? 'off',
         mutators: options.mutators ? [...options.mutators] : ['all'],
         filters: (options.filters ?? []).map((f) => f.name),
         scope: options.lines ? 'diff' : 'full',
       },
       timings: timer.timings,
     };
+  };
+
+  /**
+   * --typecheck=survivors: a mutant the tests did not detect but the type checker rejects is not
+   * a gap in the tests; the types already rule it out. It is reported CompileError, outside the
+   * score.
+   */
+  const typecheckSurvivors = async () => {
+    if (options.typecheck?.mode !== 'survivors') return;
+    const undetected = [...results.values()].filter((r) => r.status === 'Survived' || r.status === 'NoCoverage');
+    if (undetected.length === 0) return;
+    timer.start('typecheck');
+    emit({ type: 'phase', phase: 'typecheck' });
+    const rejected = await options.typecheck.check(undetected, root);
+    for (const r of undetected) {
+      const diag = rejected.get(r.num);
+      if (diag !== undefined) results.set(r.num, { ...r, status: 'CompileError', statusReason: diag });
+    }
   };
 
   const runnerPackages = model.packages.filter((p) => p.runner);
@@ -200,7 +235,8 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
     }
   }
   if (placed.length === 0 || runnerPackages.length === 0) {
-    for (const d of placed) results.set(d.num, { ...d, status: 'NoCoverage', statusReason: 'no package with a test runner' });
+    for (const d of placed) if (!results.has(d.num)) results.set(d.num, { ...d, status: 'NoCoverage', statusReason: 'no package with a test runner' });
+    await typecheckSurvivors();
     return finish([], []);
   }
 
@@ -300,6 +336,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
     const covered: Pending[] = [];
     const statics: MutantDescriptor[] = [];
     for (const d of placed) {
+      if (results.has(d.num)) continue;
       const isStatic = staticSites.has(d.site);
       const reaching = (siteTests.get(d.site) ?? []).map((t) => t.key);
       const reused = options.reuse?.(d, { static: isStatic, tests: reaching, closures });
@@ -351,6 +388,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       emit({ type: 'phase', phase: 'isolated' });
       await isolatedRuns([...fallback, ...statics.map((d) => ({ d, tests: [] as string[] }))], false);
     }
+    await typecheckSurvivors();
     return finish([...tests.values()].filter((t) => t.red === undefined), red);
 
     // --- the warm engine: rounds of many mutants per runner invocation ----------------------
