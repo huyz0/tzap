@@ -21,6 +21,8 @@ import { ModelValidationError, parseModel, score, serialiseModel, type ProjectMo
 import { reporters as reporterRegistry, writeReports } from '@tzap/report';
 
 const reporterNames = Object.keys(reporterRegistry);
+import { createJestSession } from '@tzap/runner-jest';
+import { createNodeTestSession } from '@tzap/runner-node';
 import { createVitestSession } from '@tzap/runner-vitest';
 import { loadCache, saveCache } from '@tzap/core';
 
@@ -218,7 +220,7 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
     filters,
     reduce: { onePerLine: values['one-per-line'] === true, equivalence: values.dedup === true },
     lines: changed?.files,
-    runners: { vitest: createVitestSession },
+    runners: { vitest: createVitestSession, jest: createJestSession, node: createNodeTestSession },
     workers,
     concurrency,
     tzapVersion: VERSION,

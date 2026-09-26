@@ -25,25 +25,23 @@ for (const m of Object.values(manifests)) {
   }
 }
 
-// Entry points: the CLI, and each runner's host and worker files, which are started or imported
-// by path at run time and so must stay separate files next to the CLI.
+// Entry points: the CLI, and each runner's own files, which are started, imported or handed to
+// the runner by path at run time and so must stay separate files next to the CLI. Each is
+// prefixed with its runner's name so that two runners' host files cannot collide.
 const entryPoints = { bin: path.join(root, 'packages/tzap/dist/bin.js'), cli: path.join(root, 'packages/tzap/dist/cli.js') };
+const cjsEntryPoints = {};
+const renames = {}; // runner -> { 'host.js': 'jest-host.js', ... }
 for (const d of internal.filter((x) => x.startsWith('runner-'))) {
+  const runner = d.slice('runner-'.length);
+  renames[runner] = {};
   for (const f of readdirSync(path.join(root, 'packages', d, 'dist'))) {
-    if (!f.endsWith('.js') || f === 'index.js') continue;
-    const name = f.slice(0, -3);
-    // Every runner puts its host and worker files next to the CLI; names must not collide.
-    const key = name === 'host' || name === 'worker-setup' || name === 'setup' ? `${d.slice('runner-'.length)}-${name}` : name;
-    entryPoints[key] = path.join(root, 'packages', d, 'dist', f);
+    const m = /^(.+)\.(js|cjs)$/.exec(f);
+    if (!m || f === 'index.js') continue;
+    const [, name, ext] = m;
+    if (ext === 'cjs' && name === 'shared') continue; // required by the others, bundled into them
+    renames[runner][f] = `${runner}-${f}`;
+    (ext === 'cjs' ? cjsEntryPoints : entryPoints)[`${runner}-${name}`] = path.join(root, 'packages', d, 'dist', f);
   }
-}
-
-// Runners locate their host and worker files by name next to themselves; after bundling that is
-// the CLI's directory, under the prefixed names above.
-const renames = {};
-for (const key of Object.keys(entryPoints)) {
-  const m = /^(\w+)-(host|worker-setup|setup)$/.exec(key);
-  if (m) renames[`${m[1]}:${m[2]}.js`] = `${key}.js`;
 }
 
 const aliasInternal = {
@@ -53,23 +51,12 @@ const aliasInternal = {
       const dir = args.path.slice('@tzap/'.length);
       return { path: path.join(root, 'packages', dir, 'dist', 'index.js') };
     });
-    // `path.join(import.meta.dirname, 'host.js')` inside a runner means that runner's host.
-    b.onLoad({ filter: /packages[\\/]runner-[\w-]+[\\/]dist[\\/]index\.js$/ }, (args) => {
+    // A runner names its own files relative to itself; after bundling they sit next to the CLI
+    // under prefixed names.
+    b.onLoad({ filter: /packages[\\/]runner-[\w-]+[\\/]dist[\\/][\w-]+\.c?js$/ }, (args) => {
       const runner = /runner-([\w-]+)/.exec(args.path)[1];
       let text = readFileSync(args.path, 'utf8');
-      for (const [from, to] of Object.entries(renames)) {
-        const [r, file] = from.split(':');
-        if (r === runner) text = text.split(`'${file}'`).join(`'${to}'`);
-      }
-      return { contents: text, loader: 'js', resolveDir: path.dirname(args.path) };
-    });
-    b.onLoad({ filter: /packages[\\/]runner-[\w-]+[\\/]dist[\\/]host\.js$/ }, (args) => {
-      const runner = /runner-([\w-]+)/.exec(args.path)[1];
-      let text = readFileSync(args.path, 'utf8');
-      for (const [from, to] of Object.entries(renames)) {
-        const [r, file] = from.split(':');
-        if (r === runner) text = text.split(`'${file}'`).join(`'${to}'`);
-      }
+      for (const [from, to] of Object.entries(renames[runner] ?? {})) text = text.split(`'${from}'`).join(`'${to}'`);
       return { contents: text, loader: 'js', resolveDir: path.dirname(args.path) };
     });
   },
@@ -88,6 +75,21 @@ await build({
   banner: { js: "import { createRequire as __tzapCreateRequire } from 'node:module'; const require = __tzapCreateRequire(import.meta.url);" },
   logLevel: 'warning',
 });
+
+if (Object.keys(cjsEntryPoints).length) {
+  await build({
+    entryPoints: cjsEntryPoints,
+    outdir: path.join(out, 'dist'),
+    outExtension: { '.js': '.cjs' },
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    target: 'node22',
+    external: Object.keys(dependencies),
+    plugins: [aliasInternal],
+    logLevel: 'warning',
+  });
+}
 
 const cli = manifests.tzap;
 const pkg = {

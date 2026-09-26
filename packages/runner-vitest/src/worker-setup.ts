@@ -10,7 +10,8 @@
  * records the outcome in `task.meta` and clears the failure so the next repetition starts clean.
  */
 import { beginTry, drainHits, endTry, install, type TzapRuntime } from '@tzap/runtime';
-import { PROGRESS_CHANNEL, type RunMode, type Try, type TryOutcome } from '@tzap/protocol';
+import { threadId } from 'node:worker_threads';
+import { PROGRESS_DIR_ENV, progressWriter, type RunMode, type Try, type TryOutcome } from '@tzap/protocol';
 
 interface Payload {
   runId: number;
@@ -48,12 +49,12 @@ const SKIP = 'tzap: skipped, mutant already killed in this run';
 interface WorkerState {
   runId: number;
   killed: Set<number>;
-  channel: { postMessage(m: unknown): void } | undefined;
+  progress: ReturnType<typeof progressWriter> | null;
 }
 
 function workerState(): WorkerState {
   const g = globalThis as unknown as { __tzapWorker?: WorkerState };
-  g.__tzapWorker ??= { runId: -1, killed: new Set(), channel: undefined };
+  g.__tzapWorker ??= { runId: -1, killed: new Set(), progress: null };
   return g.__tzapWorker;
 }
 
@@ -77,15 +78,7 @@ export function setup(vitest: Vitest): void {
     ws.runId = payload.runId;
     ws.killed = new Set();
   }
-  if (ws.channel === undefined && typeof BroadcastChannel !== 'undefined') {
-    try {
-      const BC = (globalThis as unknown as { BroadcastChannel: new (n: string) => { postMessage(m: unknown): void } }).BroadcastChannel;
-      ws.channel = new BC(PROGRESS_CHANNEL);
-      (ws.channel as unknown as { unref?: () => void }).unref?.();
-    } catch {
-      ws.channel = undefined;
-    }
-  }
+  if (ws.progress === null) ws.progress = progressWriter(process.env[PROGRESS_DIR_ENV], `${process.pid}-${threadId}`);
 
   if (payload.mode === 'coverage') {
     setupCoverage(vitest, rt);
@@ -128,7 +121,7 @@ export function setup(vitest: Vitest): void {
       rt.a = -1;
       throw new Error(SKIP);
     }
-    ws.channel?.postMessage([payload.runId, task.id, tr.m]);
+    ws.progress?.(payload.runId, task.id, tr.m, false);
     beginTry(rt, payload.mode === 'static' ? (payload.staticMutant ?? -1) : tr.m, tr.N, tr.L);
   });
 
@@ -137,6 +130,7 @@ export function setup(vitest: Vitest): void {
     if (!tries) return;
     const i = task.result?.repeatCount ?? 0;
     const tr = tries[i]!;
+    ws.progress?.(payload.runId, task.id, tr.m, true);
     const reached = rt.n > 0;
     const { hung } = endTry(rt);
     if (payload.mode === 'static') rt.a = payload.staticMutant ?? -1;

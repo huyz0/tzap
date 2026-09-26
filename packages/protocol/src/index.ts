@@ -100,7 +100,11 @@ export interface SessionOptions {
 
 export interface RunnerSession {
   readonly kind: string;
-  start(): Promise<{ runnerVersion: string }>;
+  /**
+   * `isolatesFiles`: every test file gets fresh module state on every run (Jest does), so a
+   * static mutant can run in this same session rather than in a separately isolated one.
+   */
+  start(): Promise<{ runnerVersion: string; isolatesFiles?: boolean }>;
   /** Absolute paths of every test file the runner would run. Optional: without it, a diff run cannot narrow its coverage phase. */
   listFiles?(): Promise<string[]>;
   run(request: RunRequest): Promise<RunResult>;
@@ -126,3 +130,24 @@ export type HostResponse =
 
 /** Name of the BroadcastChannel runner workers report progress on, so a hang can be attributed. */
 export const PROGRESS_CHANNEL = 'tzap-progress';
+
+// --- progress files -------------------------------------------------------------------------
+//
+// A runner worker that a mutant has hung synchronously cannot say so: its event loop is blocked.
+// So every worker overwrites a one-line file as each try starts and ends, and the engine side
+// reads them when a run goes silent. Files rather than messages, because they work the same for
+// worker threads and child processes and need nothing of the runner's own IPC.
+
+/** Environment variable naming the directory runner workers write progress files into. */
+export const PROGRESS_DIR_ENV = 'TZAP_PROGRESS_DIR';
+
+export interface ProgressEntry {
+  runId: number;
+  test: string;
+  mutant: number;
+  /** The try finished; the worker is not stuck in it. */
+  done: boolean;
+  /** Last write, epoch milliseconds. */
+  at: number;
+}
+export { progressWriter, readProgress } from './progress.js';

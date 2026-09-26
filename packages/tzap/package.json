@@ -4,12 +4,23 @@
   "description": "Fast, diff-aware mutation testing for TypeScript and JavaScript",
   "type": "module",
   "license": "Apache-2.0",
-  "bin": { "tzap": "./dist/bin.js" },
-  "exports": { ".": { "types": "./dist/cli.d.ts", "default": "./dist/cli.js" } },
+  "bin": {
+    "tzap": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/cli.d.ts",
+      "default": "./dist/cli.js"
+    }
+  },
   "main": "./dist/cli.js",
   "types": "./dist/cli.d.ts",
-  "files": ["dist"],
-  "engines": { "node": ">=22.12" },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
   "dependencies": {
     "@tzap/model": "workspace:*",
     "@tzap/core": "workspace:*",
@@ -17,6 +28,8 @@
     "@tzap/report": "workspace:*",
     "@tzap/discover": "workspace:*",
     "@tzap/runner-vitest": "workspace:*",
-    "@tzap/instrument": "workspace:*"
+    "@tzap/instrument": "workspace:*",
+    "@tzap/runner-jest": "workspace:*",
+    "@tzap/runner-node": "workspace:*"
   }
 }

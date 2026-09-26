@@ -2,7 +2,7 @@
 // the publishable package, install the tarball into a fresh project outside this repository,
 // and run it the way a user would.
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -15,18 +15,28 @@ const packDir = mkdtempSync(path.join(os.tmpdir(), 'tzap-pack-'));
 run('npm', ['pack', '--pack-destination', packDir], pkgDir);
 const tarball = path.join(packDir, readdirSync(packDir).find((f) => f.endsWith('.tgz')));
 
-const project = mkdtempSync(path.join(os.tmpdir(), 'tzap-smoke-'));
-cpSync(path.join(root, 'fixtures', 'sample-vitest'), project, { recursive: true, filter: (s) => !s.includes('node_modules') });
-writeFileSync(path.join(project, 'package.json'), JSON.stringify({ name: 'smoke', private: true, type: 'module' }));
+const projects = [];
+/** Copies a fixture outside the repository and installs the packed tarball (and extra packages) into it. */
+function setUp(fixture, extra) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'tzap-smoke-'));
+  projects.push(dir);
+  cpSync(path.join(root, 'fixtures', fixture), dir, { recursive: true, filter: (s) => !s.includes('node_modules') });
+  const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'));
+  writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'smoke', private: true, type: pkg.type ?? 'module', scripts: pkg.scripts }));
+  run('npm', ['install', '--no-audit', '--no-fund', '--loglevel=error', ...extra, tarball], dir);
+  return dir;
+}
+const expected = 'tzap: 6 survived, 3 uncovered of 37 mutants (score 75.7%, strength 82.4%)';
 try {
-  run('npm', ['install', '--no-audit', '--no-fund', '--loglevel=error', 'vitest@5.0.2', tarball], project);
-  const version = run('npx', ['tzap', '--version'], project).trim();
-  const out = run('npx', ['tzap', 'run', '-q', '-r', 'agent'], project);
-  const first = out.split('\n')[0];
-  const expected = 'tzap: 6 survived, 3 uncovered of 37 mutants (score 75.7%, strength 82.4%)';
-  if (first !== expected) throw new Error(`unexpected result from the installed package:\n${out}`);
-  console.log(`installed tzap ${version} from ${path.basename(tarball)} and ran it: ${first}`);
+  for (const [fixture, extra] of [['sample-vitest', ['vitest@5.0.2']], ['sample-node', []]]) {
+    const dir = setUp(fixture, extra);
+    const out = run('npx', ['tzap', 'run', '-q', '-r', 'agent'], dir);
+    const first = out.split('\n')[0];
+    if (first !== expected) throw new Error(`unexpected result from the installed package on ${fixture}:\n${out}`);
+    console.log(`${fixture}: ${first}`);
+  }
+  console.log(`installed tzap ${run('npx', ['tzap', '--version'], projects[0]).trim()} from ${path.basename(tarball)}`);
 } finally {
-  rmSync(project, { recursive: true, force: true });
+  for (const dir of projects) rmSync(dir, { recursive: true, force: true });
   rmSync(packDir, { recursive: true, force: true });
 }

@@ -255,6 +255,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
 
   let runId = 1;
   const warm = new Map<string, RunnerSession>();
+  const isolatesFiles = new Set<string>();
   const graph = new ImportGraph({
     workspacePackages: new Map(model.packages.map((p) => [p.id, path.resolve(root, p.root)])),
   });
@@ -273,7 +274,8 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
   try {
     for (const pkg of runnerPackages) {
       const s = sessionFor(pkg);
-      await s.start();
+      const info = await s.start();
+      if (info.isolatesFiles) isolatesFiles.add(pkg.id);
       warm.set(pkg.id, s);
       let files: string[] | undefined;
       if (options.lines && s.listFiles) {
@@ -413,6 +415,12 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       N: Math.max(HIT_FLOOR, HIT_FACTOR * (t.hits.get(site) ?? 1)),
       L: Math.max(LOOP_FLOOR, LOOP_FACTOR * t.loops),
     });
+    /**
+     * The backstop's silence window: how long no worker may start or finish a try before one is
+     * declared stuck. Loops and repeated evaluation are caught long before by counting; this is
+     * for a mutant that blocks outside instrumented code.
+     */
+    const silenceMs = Math.max(15_000, 10 * Math.max(0, ...green.map((t) => t.duration ?? 0)) + 5_000);
     /** An unmutated try. Two bracket each test's mutant tries in a round. */
     const control = (t: TestRecord): Try => ({ m: -1, N: Infinity, L: Math.max(LOOP_FLOOR, LOOP_FACTOR * t.loops) });
 
@@ -449,7 +457,6 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         const firstRound = round === 1;
         const byPkg = new Map<string, Map<string, Try[]>>();
         let tries = 0;
-        let budget = 10_000;
         for (const p of active) {
           const upto = firstRound ? p.cursor + 1 : p.warm.length;
           for (let i = p.cursor; i < upto; i++) {
@@ -460,7 +467,6 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
             if (!list) plan.set(t.runnerId, (list = [control(t)]));
             list.push({ m: p.d.num, ...limitsFor(t, p.d.site) });
             tries++;
-            budget += 3 * (t.duration ?? 0) + 25;
           }
           p.cursor = upto;
         }
@@ -468,15 +474,17 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
           for (const [id, list] of plan) {
             const t = tests.get(`${pkgId}::${id}`)!;
             list.push(control(t));
-            budget += 6 * (t.duration ?? 0);
           }
         }
         const started = performance.now();
         const outcomes = new Map<number, Outcome>();
         const suspect = new Set<number>();
         for (const [pkgId, plan] of byPkg) {
-          const res = await runWithRecovery(pkgId, Object.fromEntries(plan), budget);
+          const res = await runWithRecovery(pkgId, Object.fromEntries(plan), silenceMs);
           collect(pkgId, res, outcomes, suspect);
+          // A planned try the runner never reported on decided nothing: re-decide it in isolation.
+          const reported = new Set(res.tests.flatMap((t) => (t.tries ?? []).map(([m]) => `${t.id} ${m}`)));
+          for (const [id, list] of plan) for (const tr of list) if (tr.m >= 0 && !reported.has(`${id} ${tr.m}`)) suspect.add(tr.m);
         }
         for (const p of active) {
           const o = outcomes.get(p.d.num);
@@ -556,7 +564,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
           return merged;
         }
         const hung = new Set((res.inFlight ?? []).map((x) => x.mutant).filter((m) => m >= 0));
-        if (hung.size === 0) throw new Error('a test run exceeded its wall-clock budget with no mutant in flight');
+        if (hung.size === 0) throw new Error(`a test run went silent for ${Math.round(budgetMs / 1000)} s with no mutant try in flight: a hook outside any test (beforeAll/afterAll, a global setup) is blocking; it does so without any mutant, so check the suite on its own`);
         emit({ type: 'warning', message: `wall-clock backstop: mutants ${[...hung].join(', ')} declared hung` });
         for (const m of hung) {
           merged.tests.push({ id: '__backstop__', name: 'backstop', file: '', state: 'fail', duration: budgetMs, tries: [[m, 'T', 'wall-clock backstop']] });
@@ -626,7 +634,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
             if (!fileList.includes(abs)) fileList.push(abs);
           }
           if (fileList.length === 0) continue;
-          let s = fresh ? undefined : shared.get(pkgId);
+          let s = fresh ? undefined : isolatesFiles.has(pkgId) ? warm.get(pkgId) : shared.get(pkgId);
           if (!s) {
             s = sessionFor(pkg, true);
             await s.start();
@@ -634,7 +642,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
           }
           try {
             const budget = 15_000 + Object.keys(plan).reduce((a, id) => a + 5 * (tests.get(`${pkgId}::${id}`)?.duration ?? 0) + 50, 0);
-            const res = await s.run({ id: runId++, mode: 'static', staticMutant: d.num, plan, files: fileList, budgetMs: budget });
+            const res = await s.run({ id: runId++, mode: 'static', staticMutant: d.num, plan, files: fileList, budgetMs: Math.max(budget, silenceMs) });
             if (res.timedOut) {
               timeout = true;
               killedBy = 'wall-clock backstop';

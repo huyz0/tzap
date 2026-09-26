@@ -1,23 +1,23 @@
 /**
- * The Vitest runner session: spawns a host process that owns one Vitest instance and talks to
+ * The Jest runner session: spawns a host process that runs the package's Jest in band and talks to
  * it over IPC. Implements the engine's `RunnerSession` contract.
  */
 import { fork, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
-import { readProgress, type HostRequest, type HostResponse, type RunRequest, type RunResult, type RunnerFactory, type RunnerSession, type SessionOptions } from '@tzap/protocol';
+import type { HostRequest, HostResponse, RunRequest, RunResult, RunnerFactory, RunnerSession, SessionOptions } from '@tzap/protocol';
 
-export class VitestSession implements RunnerSession {
-  readonly kind = 'vitest';
+export class JestSession implements RunnerSession {
+  readonly kind = 'jest';
   private child: ChildProcess | undefined;
   private pending: { resolve: (r: RunResult) => void; reject: (e: Error) => void; id: number } | undefined;
-  private readonly inFlight = new Map<string, number>();
-  private starting: { resolve: (v: { runnerVersion: string }) => void; reject: (e: Error) => void } | undefined;
+  /** The try most recently started: in band, the only one that can be stuck. */
+  private latest: { test: string; mutant: number; at: number } | undefined;
+  private starting: { resolve: (v: { runnerVersion: string; isolatesFiles?: boolean }) => void; reject: (e: Error) => void } | undefined;
   private stderr = '';
-  private listing: ((files: string[]) => void) | undefined;
 
   constructor(private readonly options: SessionOptions) {}
 
-  start(): Promise<{ runnerVersion: string }> {
+  start(): Promise<{ runnerVersion: string; isolatesFiles?: boolean }> {
     const hostPath = path.join(import.meta.dirname, 'host.js');
     const child = fork(hostPath, [], {
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
@@ -31,7 +31,7 @@ export class VitestSession implements RunnerSession {
     });
     child.on('message', (m: HostResponse) => this.onMessage(m));
     child.on('exit', (code, signal) => {
-      const err = new Error(`the Vitest host exited (code ${code}, signal ${signal})${this.stderr ? `:\n${this.stderr}` : ''}`);
+      const err = new Error(`the Jest host exited (code ${code}, signal ${signal})${this.stderr ? `:\n${this.stderr}` : ''}`);
       this.starting?.reject(err);
       this.starting = undefined;
       if (this.pending) {
@@ -54,15 +54,12 @@ export class VitestSession implements RunnerSession {
   private onMessage(m: HostResponse): void {
     switch (m.type) {
       case 'ready':
-        this.starting?.resolve({ runnerVersion: m.runnerVersion });
+        // Jest gives every test file a fresh module registry on every run.
+        this.starting?.resolve({ runnerVersion: m.runnerVersion, isolatesFiles: true });
         this.starting = undefined;
         break;
-      case 'files':
-        this.listing?.(m.files);
-        this.listing = undefined;
-        break;
       case 'progress':
-        if (this.pending && m.runId === this.pending.id) this.inFlight.set(m.test, m.mutant);
+        if (this.pending && m.runId === this.pending.id) this.latest = { test: m.test, mutant: m.mutant, at: Date.now() };
         break;
       case 'result': {
         const p = this.pending;
@@ -85,17 +82,9 @@ export class VitestSession implements RunnerSession {
     }
   }
 
-  listFiles(): Promise<string[]> {
-    if (!this.child) return Promise.reject(new Error('the Vitest host is not running'));
-    return new Promise((resolve) => {
-      this.listing = resolve;
-      this.send({ type: 'list' });
-    });
-  }
-
   run(request: RunRequest): Promise<RunResult> {
-    if (!this.child) return Promise.reject(new Error('the Vitest host is not running'));
-    this.inFlight.clear();
+    if (!this.child) return Promise.reject(new Error('the Jest host is not running'));
+    this.latest = undefined;
     return new Promise<RunResult>((resolve, reject) => {
       let timer: NodeJS.Timeout | undefined;
       this.pending = {
@@ -110,23 +99,18 @@ export class VitestSession implements RunnerSession {
         },
       };
       if (request.budgetMs !== undefined) {
-        // The wall-clock backstop fires on silence, not on total time: when no worker has
-        // started or finished a try for budgetMs, something blocks one synchronously. Kill the
-        // host; the tries that started and never finished are the culprits.
-        const dir = path.join(this.options.tmpDir, `progress-${this.child?.pid ?? 0}`);
+        // The wall-clock backstop fires on silence: no try started for budgetMs means the host,
+        // which runs tests in band, is blocked in the try it started last.
         const started = Date.now();
-        const window = request.budgetMs;
         timer = setInterval(() => {
-          const entries = readProgress(dir).filter((e) => e.runId === request.id);
-          const last = Math.max(started, ...entries.map((e) => e.at));
-          if (Date.now() - last <= window) return;
-          const inFlight = entries.filter((e) => !e.done).map((e) => ({ test: e.test, mutant: e.mutant }));
+          if (Date.now() - Math.max(started, this.latest?.at ?? 0) <= request.budgetMs!) return;
+          const inFlight = this.latest ? [{ test: this.latest.test, mutant: this.latest.mutant }] : [];
           const p = this.pending;
           this.pending = undefined;
           this.child?.kill('SIGKILL');
           this.child = undefined;
           p?.resolve({ id: request.id, tests: [], files: [], timedOut: true, inFlight, durationMs: Date.now() - started });
-        }, Math.min(500, window));
+        }, Math.min(500, request.budgetMs));
       }
       this.send({ type: 'run', request });
     });
@@ -149,4 +133,4 @@ export class VitestSession implements RunnerSession {
   }
 }
 
-export const createVitestSession: RunnerFactory = (options) => new VitestSession(options);
+export const createJestSession: RunnerFactory = (options) => new JestSession(options);

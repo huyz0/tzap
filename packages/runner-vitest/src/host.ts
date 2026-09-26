@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSy
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { FileOutcome, HostRequest, HostResponse, RunRequest, RunResult, SessionOptions, TestOutcome } from '@tzap/protocol';
-import { PROGRESS_CHANNEL } from '@tzap/protocol';
+import { PROGRESS_DIR_ENV } from '@tzap/protocol';
 
 const send = (m: HostResponse) => process.send?.(m);
 
@@ -57,6 +57,8 @@ async function init(o: SessionOptions): Promise<void> {
   process.chdir(pkgRoot);
   for (const [k, v] of Object.entries(o.pkg.env ?? {})) process.env[k] = v;
   process.env.TZAP = '1';
+  // Workers, threads or forks, inherit this and write their progress files there.
+  process.env[PROGRESS_DIR_ENV] = path.join(o.tmpDir, `progress-${process.pid}`);
   // What the vitest CLI sets before it loads a config; plugins read these in their config hooks
   // (@testing-library/svelte adds the `browser` condition only when VITEST is set).
   process.env.TEST = 'true';
@@ -127,12 +129,6 @@ async function init(o: SessionOptions): Promise<void> {
   vitest = await createVitest('test', cliOptions, { plugins: [plugin] });
   (vitest as { version?: string }).version = vitestPkg.version;
 
-  const channel = new BroadcastChannel(PROGRESS_CHANNEL);
-  channel.onmessage = (e: MessageEvent) => {
-    const [runId, test, mutant] = e.data as [number, string, number];
-    send({ type: 'progress', runId, test, mutant });
-  };
-  (channel as unknown as { unref?: () => void }).unref?.();
 
   send({ type: 'ready', runnerVersion: vitestPkg.version });
 }

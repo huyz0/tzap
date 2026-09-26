@@ -1,0 +1,30 @@
+{
+  "name": "@tzap/runner-node",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22.15"
+  },
+  "dependencies": {
+    "@tzap/model": "workspace:*",
+    "@tzap/protocol": "workspace:*",
+    "@tzap/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@tzap/core": "workspace:*",
+    "@tzap/instrument": "workspace:*",
+    "vitest": "5.0.2"
+  }
+}

@@ -1,6 +1,40 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "rootDir": "src", "outDir": "dist", "tsBuildInfoFile": "dist/.tsbuildinfo" },
-  "include": ["src"],
-  "references": [{ "path": "../model" }, { "path": "../core" }, { "path": "../git" }, { "path": "../report" }, { "path": "../discover" }, { "path": "../runner-vitest" }, { "path": "../instrument" }]
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "include": [
+    "src"
+  ],
+  "references": [
+    {
+      "path": "../model"
+    },
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../git"
+    },
+    {
+      "path": "../report"
+    },
+    {
+      "path": "../discover"
+    },
+    {
+      "path": "../runner-vitest"
+    },
+    {
+      "path": "../instrument"
+    },
+    {
+      "path": "../runner-jest"
+    },
+    {
+      "path": "../runner-node"
+    }
+  ]
 }
