@@ -118,7 +118,9 @@ export function setup(vitest: Vitest): void {
     if (!tries) return;
     const i = task.result?.repeatCount ?? 0;
     const tr = tries[i]!;
-    if (payload.mode === 'mutate' && ws.killed.has(tr.m)) {
+    // m === -1 is a control try: the test unmutated, bracketing the mutant tries so the engine
+    // can tell a test that fails because of its context from one that fails because of a mutant.
+    if (payload.mode === 'mutate' && tr.m >= 0 && ws.killed.has(tr.m)) {
       rt.a = -1;
       throw new Error(SKIP);
     }
@@ -139,7 +141,7 @@ export function setup(vitest: Vitest): void {
     if (message === SKIP) outcome = 'X';
     else if (hung) outcome = 'T';
     else outcome = failed !== (task.fails === true) ? 'K' : 'S';
-    if (outcome === 'K' || outcome === 'T') ws.killed.add(tr.m);
+    if ((outcome === 'K' || outcome === 'T') && tr.m >= 0) ws.killed.add(tr.m);
     (task.meta.tzap as Array<[number, TryOutcome, string?]>).push(
       outcome === 'K' && message !== undefined ? [tr.m, outcome, message] : [tr.m, outcome],
     );

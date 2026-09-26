@@ -1,0 +1,1 @@
+{ "name": "pnpm-root", "private": true, "devDependencies": { "vitest": "^5.0.0" } }

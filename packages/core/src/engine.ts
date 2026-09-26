@@ -14,7 +14,9 @@ import {
 } from '@tzap/model';
 import { instrument, type LineRange, type MutantFilter } from '@tzap/instrument';
 import type { RunnerFactory, RunnerSession, RunResult, Try } from '@tzap/protocol';
+import { createHash } from 'node:crypto';
 import { relativeTo, sourceFiles, toPosix } from './files.js';
+import { ImportGraph } from './graph.js';
 
 export type EngineKind = 'warm' | 'reference';
 
@@ -35,6 +37,11 @@ export interface EngineOptions {
   previousKillers?: ReadonlyMap<string, string>;
   /** Verdicts to reuse, keyed by mutant id (decided by the cache). */
   reuse?: (m: MutantDescriptor, coverage: MutantCoverage) => MutantResult | undefined;
+  /**
+   * Set when nothing that could change a verdict has changed since the cache was written: if
+   * every mutant is found, no test runs at all.
+   */
+  unchanged?: { lookup(m: MutantDescriptor): MutantResult | undefined; tests: TestInfo[] };
   onEvent?: (e: EngineEvent) => void;
   tzapVersion: string;
   tmpDir?: string;
@@ -53,10 +60,13 @@ export interface MutantCoverage {
   static: boolean;
   /** Global test keys that reach the mutant. */
   tests: string[];
+  /** Import-closure hash per global test key. */
+  closures: ReadonlyMap<string, string>;
 }
 
 interface TestRecord extends TestInfo {
   key: string;
+  closure?: string;
   pkg: string;
   runnerId: string;
   hits: Map<number, number>;
@@ -145,7 +155,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
     .filter((d) => d.num < 0)
     .map((d) => ({ ...d, status: 'Ignored' as const, statusReason: d.description ?? d.ignoredBy }));
 
-  const finish = (tests: TestRecord[], red: TestRecord[]): AnalysisResult => {
+  const finish = (tests: Array<TestInfo & { key?: string }>, red: TestRecord[]): AnalysisResult => {
     timer.stop();
     const mutants = [...ignored, ...results.values()].sort(compareMutants);
     try {
@@ -159,7 +169,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       files,
       mutants,
       tests: tests
-        .map((t) => ({ id: t.key, name: t.name, file: t.file, duration: t.duration }))
+        .map((t) => ({ id: t.key ?? t.id, name: t.name, file: t.file, duration: t.duration, ...(t.closure ? { closure: t.closure } : {}) }))
         .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
       redTests: red.map((t) => ({ id: t.key, name: t.name, file: t.file, message: t.red ?? '' })),
       config: {
@@ -174,6 +184,16 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
   };
 
   const runnerPackages = model.packages.filter((p) => p.runner);
+
+  // Nothing changed since the cache was written: answer from it without starting a runner.
+  if (options.unchanged && placed.length > 0) {
+    const found = placed.map((d) => options.unchanged!.lookup(d));
+    if (found.every((r) => r !== undefined)) {
+      for (const r of found) results.set(r!.num, { ...r!, cached: true });
+      emit({ type: 'progress', decided: results.size, total: placed.length });
+      return finish(options.unchanged.tests, []);
+    }
+  }
   if (placed.length === 0 || runnerPackages.length === 0) {
     for (const d of placed) results.set(d.num, { ...d, status: 'NoCoverage', statusReason: 'no package with a test runner' });
     return finish([], []);
@@ -232,6 +252,31 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
     const green = [...tests.values()].filter((t) => t.red === undefined);
     emit({ type: 'coverage', tests: green.length, red: red.length });
 
+    // Import closures: the cache's key for "nothing this test can reach has changed".
+    const graph = new ImportGraph({
+      workspacePackages: new Map(model.packages.map((p) => [p.id, path.resolve(root, p.root)])),
+    });
+    const packageFiles = new Map(model.packages.map((p) => [p.id, sourceFiles(root, p)]));
+    let everything: string | undefined;
+    const everythingHash = () => {
+      if (everything) return everything;
+      const h = createHash('sha256');
+      for (const t of [...tests.values()].map((x) => x.file).sort()) h.update(t).update(graph.node(path.resolve(root, t)).hash);
+      for (const [, fs] of [...packageFiles].sort(([a], [b]) => (a < b ? -1 : 1))) for (const f of fs) h.update(f).update(graph.node(f).hash);
+      return (everything = `all:${h.digest('hex').slice(0, 16)}`);
+    };
+    const closureByFile = new Map<string, string>();
+    for (const t of green) {
+      let c = closureByFile.get(t.file);
+      if (c === undefined) {
+        const abs = path.resolve(root, t.file);
+        c = graph.closure(abs).dynamic ? everythingHash() : graph.closureHash(abs, (pkg) => packageFiles.get(pkg) ?? []);
+        closureByFile.set(t.file, c);
+      }
+      t.closure = c;
+    }
+    const closures = new Map(green.map((t) => [t.key, t.closure!]));
+
     const siteTests = new Map<number, TestRecord[]>();
     for (const t of green) {
       for (const site of t.hits.keys()) {
@@ -247,7 +292,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
     for (const d of placed) {
       const isStatic = staticSites.has(d.site);
       const reaching = (siteTests.get(d.site) ?? []).map((t) => t.key);
-      const reused = options.reuse?.(d, { static: isStatic, tests: reaching });
+      const reused = options.reuse?.(d, { static: isStatic, tests: reaching, closures });
       if (reused) {
         results.set(d.num, { ...reused, ...d, status: reused.status, cached: true });
         continue;
@@ -281,23 +326,26 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       N: Math.max(HIT_FLOOR, HIT_FACTOR * (t.hits.get(site) ?? 1)),
       L: Math.max(LOOP_FLOOR, LOOP_FACTOR * t.loops),
     });
+    /** An unmutated try. Two bracket each test's mutant tries in a round. */
+    const control = (t: TestRecord): Try => ({ m: -1, N: Infinity, L: Math.max(LOOP_FLOOR, LOOP_FACTOR * t.loops) });
 
+    timer.start('execute');
+    emit({ type: 'phase', phase: 'execute' });
     if (options.engine === 'reference') {
-      timer.start('execute');
-      emit({ type: 'phase', phase: 'execute' });
-      await referenceEngine();
+      // Everything through the isolated path, one fresh session per mutant.
+      await isolatedRuns([...covered.map((p) => ({ d: p.d, tests: p.tests })), ...statics.map((d) => ({ d, tests: [] as string[] }))], true);
     } else {
-      timer.start('execute');
-      emit({ type: 'phase', phase: 'execute' });
-      await warmEngine();
-      timer.start('static');
-      emit({ type: 'phase', phase: 'static' });
-      await staticMutants(statics);
+      const fallback = await warmEngine();
+      timer.start('isolated');
+      emit({ type: 'phase', phase: 'isolated' });
+      await isolatedRuns([...fallback, ...statics.map((d) => ({ d, tests: [] as string[] }))], false);
     }
     return finish([...tests.values()].filter((t) => t.red === undefined), red);
 
-    // --- the warm engine: rounds of many mutants per Vitest run ----------------------------
-    async function warmEngine(): Promise<void> {
+    // --- the warm engine: rounds of many mutants per runner invocation ----------------------
+    /** Returns the mutants whose warm verdict could not be trusted, for the isolated path. */
+    async function warmEngine(): Promise<Array<{ d: MutantDescriptor; tests: string[] }>> {
+      const fallback: Array<{ d: MutantDescriptor; tests: string[] }> = [];
       let round = 0;
       let active = covered.filter((p) => p.cursor < p.tests.length);
       while (active.length > 0) {
@@ -315,18 +363,26 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
             let plan = byPkg.get(t.pkg);
             if (!plan) byPkg.set(t.pkg, (plan = new Map()));
             let list = plan.get(t.runnerId);
-            if (!list) plan.set(t.runnerId, (list = []));
+            if (!list) plan.set(t.runnerId, (list = [control(t)]));
             list.push({ m: p.d.num, ...limitsFor(t, p.d.site) });
             tries++;
             budget += 3 * (t.duration ?? 0) + 25;
           }
           p.cursor = upto;
         }
+        for (const [pkgId, plan] of byPkg) {
+          for (const [id, list] of plan) {
+            const t = tests.get(`${pkgId}::${id}`)!;
+            list.push(control(t));
+            budget += 6 * (t.duration ?? 0);
+          }
+        }
         const started = performance.now();
-        const outcomes = new Map<number, { killedBy?: string; timeout?: boolean; message?: string; tested: number }>();
+        const outcomes = new Map<number, Outcome>();
+        const suspect = new Set<number>();
         for (const [pkgId, plan] of byPkg) {
           const res = await runWithRecovery(pkgId, Object.fromEntries(plan), budget);
-          collect(pkgId, res, outcomes);
+          collect(pkgId, res, outcomes, suspect);
         }
         for (const p of active) {
           const o = outcomes.get(p.d.num);
@@ -335,6 +391,11 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
             results.set(p.d.num, { ...p.d, status: 'Timeout', statusReason: o.message ?? 'declared hung', coveredBy: p.tests, killedBy: o.killedBy ? [o.killedBy] : [] });
           } else if (o?.killedBy) {
             results.set(p.d.num, { ...p.d, status: 'Killed', statusReason: o.message, killedBy: [o.killedBy], coveredBy: p.tests, testsCompleted: p.completed });
+          } else if (suspect.has(p.d.num)) {
+            // A control try around this mutant's tries failed: the context, not the mutant, may
+            // have decided them. It is decided again in isolation.
+            fallback.push({ d: p.d, tests: p.tests });
+            results.set(p.d.num, { ...p.d, status: 'Pending' });
           } else if (p.cursor >= p.tests.length) {
             results.set(p.d.num, { ...p.d, status: 'Survived', coveredBy: p.tests, testsCompleted: p.completed });
           }
@@ -343,14 +404,34 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         emit({ type: 'progress', decided: decidedCount(), total });
         active = active.filter((p) => !results.has(p.d.num));
       }
+      for (const f of fallback) results.delete(f.d.num);
+      if (fallback.length) emit({ type: 'warning', message: `${fallback.length} mutants re-decided in isolation because a control try failed around them` });
+      return fallback;
     }
 
-    function collect(pkgId: string, res: RunResult, outcomes: Map<number, { killedBy?: string; timeout?: boolean; message?: string; tested: number }>) {
+    interface Outcome {
+      killedBy?: string;
+      timeout?: boolean;
+      message?: string;
+      tested: number;
+    }
+
+    function collect(pkgId: string, res: RunResult, outcomes: Map<number, Outcome>, suspect: Set<number>) {
       for (const t of res.tests) {
-        for (const [m, outcome, message] of t.tries ?? []) {
+        const tries = t.tries ?? [];
+        const first = tries[0];
+        const last = tries[tries.length - 1];
+        const controlFailed =
+          (first !== undefined && first[0] === -1 && first[1] !== 'S') || (last !== undefined && tries.length > 1 && last[0] === -1 && last[1] !== 'S');
+        for (const [m, outcome, message] of tries) {
+          if (m < 0) continue;
           let o = outcomes.get(m);
           if (!o) outcomes.set(m, (o = { tested: 0 }));
           if (outcome === 'X') continue;
+          if (controlFailed) {
+            suspect.add(m);
+            continue;
+          }
           o.tested++;
           if ((outcome === 'K' || outcome === 'T') && o.killedBy === undefined) {
             o.killedBy = `${pkgId}::${t.id}`;
@@ -365,7 +446,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
     async function runWithRecovery(pkgId: string, plan: Record<string, Try[]>, budgetMs: number): Promise<RunResult> {
       const merged: RunResult = { id: 0, tests: [], files: [], durationMs: 0 };
       let remaining = plan;
-      for (let attempt = 0; attempt < 20; attempt++) {
+      for (let attempt = 0; attempt < 50; attempt++) {
         let s = warm.get(pkgId)!;
         const res = await s.run({ id: runId++, mode: 'mutate', plan: remaining, budgetMs });
         if (!res.timedOut) {
@@ -373,9 +454,9 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
           merged.files.push(...res.files);
           return merged;
         }
-        // Restart the session and drop the hung tries.
-        const hung = new Set((res.inFlight ?? []).map((x) => x.mutant));
-        emit({ type: 'warning', message: `wall-clock backstop hit; mutants ${[...hung].join(', ') || '(unknown)'} declared hung` });
+        const hung = new Set((res.inFlight ?? []).map((x) => x.mutant).filter((m) => m >= 0));
+        if (hung.size === 0) throw new Error('a test run exceeded its wall-clock budget with no mutant in flight');
+        emit({ type: 'warning', message: `wall-clock backstop: mutants ${[...hung].join(', ')} declared hung` });
         for (const m of hung) {
           merged.tests.push({ id: '__backstop__', name: 'backstop', file: '', state: 'fail', duration: budgetMs, tries: [[m, 'T', 'wall-clock backstop']] });
         }
@@ -386,66 +467,78 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         const next: Record<string, Try[]> = {};
         for (const [test, list] of Object.entries(remaining)) {
           const kept = list.filter((t) => !hung.has(t.m));
-          if (kept.length) next[test] = kept;
-        }
-        if (hung.size === 0) {
-          // Nothing attributable: the whole plan is suspect. Give every try the benefit of a
-          // run on its own rather than guessing.
-          throw new Error('a test run exceeded its wall-clock budget with no try in flight');
+          if (kept.some((t) => t.m >= 0)) next[test] = kept;
         }
         remaining = next;
       }
       throw new Error('too many hung runs in one round');
     }
 
-    // --- static mutants: one isolated run per mutant ------------------------------------------
-    async function staticMutants(list: MutantDescriptor[]): Promise<void> {
+    // --- the isolated path: static mutants, suspect ones, and the whole reference engine -------
+    /**
+     * Each mutant is active before any module evaluates, in a session that isolates test files,
+     * and every green test of every file that could reach it runs, in the file's own order, so
+     * no test is deprived of the tests it follows. Killed when any of them fails. With `fresh`,
+     * each mutant gets a new session: the reference engine, which reuses nothing.
+     */
+    async function isolatedRuns(list: Array<{ d: MutantDescriptor; tests: string[] }>, fresh: boolean): Promise<void> {
       if (list.length === 0) return;
-      const isolated = new Map<string, RunnerSession>();
-      try {
-        for (const d of list) {
-          const reachedBy = staticSites.get(d.site) ?? new Set<string>();
-          const perPkg = new Map<string, Set<string>>();
-          for (const key of reachedBy) {
+      const shared = new Map<string, RunnerSession>();
+      const concurrency = fresh ? Math.max(1, options.concurrency ?? 1) : 1;
+      let next = 0;
+      const one = async (item: { d: MutantDescriptor; tests: string[] }) => {
+        const { d } = item;
+        const isStatic = staticSites.has(d.site);
+        const perPkg = new Map<string, Set<string>>();
+        const add = (pkgId: string, file: string) => {
+          let set = perPkg.get(pkgId);
+          if (!set) perPkg.set(pkgId, (set = new Set()));
+          set.add(toPosix(file).toLowerCase());
+        };
+        for (const key of item.tests) {
+          const t = tests.get(key)!;
+          add(t.pkg, path.resolve(root, t.file));
+        }
+        for (const t of siteTests.get(d.site) ?? []) add(t.pkg, path.resolve(root, t.file));
+        if (isStatic) {
+          for (const key of staticSites.get(d.site)!) {
             const [pkgId, file] = key.split('\0') as [string, string];
-            let set = perPkg.get(pkgId);
-            if (!set) perPkg.set(pkgId, (set = new Set()));
-            set.add(file);
+            add(pkgId, file);
           }
-          // Tests that reach it inside a test (hybrid mutants) run too, in their own files.
-          for (const t of siteTests.get(d.site) ?? []) {
-            let set = perPkg.get(t.pkg);
-            if (!set) perPkg.set(t.pkg, (set = new Set()));
-            set.add(path.resolve(root, t.file));
+        }
+        let killedBy: string | undefined;
+        let message: string | undefined;
+        let timeout = false;
+        let tested = 0;
+        const coveredBy = new Set<string>(item.tests);
+        for (const t of siteTests.get(d.site) ?? []) coveredBy.add(t.key);
+        for (const [pkgId, fileSet] of perPkg) {
+          if (killedBy) break;
+          const pkg = runnerPackages.find((p) => p.id === pkgId)!;
+          const plan: Record<string, Try[]> = {};
+          const fileList: string[] = [];
+          for (const t of green) {
+            if (t.pkg !== pkgId) continue;
+            const abs = path.resolve(root, t.file);
+            if (!fileSet.has(toPosix(abs).toLowerCase())) continue;
+            plan[t.runnerId] = [{ m: d.num, ...limitsFor(t, d.site) }];
+            if (!fileList.includes(abs)) fileList.push(abs);
           }
-          let killedBy: string | undefined;
-          let message: string | undefined;
-          let timeout = false;
-          let tested = 0;
-          const coveredBy: string[] = [];
-          for (const [pkgId, fileSet] of perPkg) {
-            if (killedBy) break;
-            const pkg = runnerPackages.find((p) => p.id === pkgId)!;
-            let s = isolated.get(pkgId);
-            if (!s) {
-              s = sessionFor(pkg, true);
-              await s.start();
-              isolated.set(pkgId, s);
-            }
-            const plan: Record<string, Try[]> = {};
-            const fileList = [...fileSet];
-            const wanted = new Set(fileList.map((f) => toPosix(f).toLowerCase()));
-            for (const t of green) {
-              if (t.pkg !== pkgId || !wanted.has(toPosix(path.resolve(root, t.file)).toLowerCase())) continue;
-              plan[t.runnerId] = [{ m: d.num, ...limitsFor(t, d.site) }];
-              coveredBy.push(t.key);
-            }
-            const budget = 10_000 + Object.keys(plan).reduce((a, id) => a + 3 * (tests.get(`${pkgId}::${id}`)?.duration ?? 0) + 25, 0);
+          if (fileList.length === 0) continue;
+          let s = fresh ? undefined : shared.get(pkgId);
+          if (!s) {
+            s = sessionFor(pkg, true);
+            await s.start();
+            if (!fresh) shared.set(pkgId, s);
+          }
+          try {
+            const budget = 15_000 + Object.keys(plan).reduce((a, id) => a + 5 * (tests.get(`${pkgId}::${id}`)?.duration ?? 0) + 50, 0);
             const res = await s.run({ id: runId++, mode: 'static', staticMutant: d.num, plan, files: fileList, budgetMs: budget });
             if (res.timedOut) {
               timeout = true;
               killedBy = 'wall-clock backstop';
-              isolated.delete(pkgId);
+              message = 'wall-clock backstop';
+              shared.delete(pkgId);
               continue;
             }
             for (const f of res.files) {
@@ -464,99 +557,27 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
                 }
               }
             }
+          } finally {
+            if (fresh) await s.close();
           }
-          const base = { ...d, coveredBy, testsCompleted: tested };
-          if (timeout) results.set(d.num, { ...base, status: 'Timeout', static: true, statusReason: message ?? 'declared hung', killedBy: killedBy ? [killedBy] : [] });
-          else if (killedBy) results.set(d.num, { ...base, status: 'Killed', static: true, statusReason: message, killedBy: [killedBy] });
-          else if (coveredBy.length === 0 && tested === 0) results.set(d.num, { ...base, status: 'NoCoverage', static: true });
-          else results.set(d.num, { ...base, status: 'Survived', static: true });
-          emit({ type: 'progress', decided: decidedCount(), total });
         }
-      } finally {
-        await Promise.all([...isolated.values()].map((s) => s.close()));
-      }
-    }
-
-    // --- the reference engine: a fresh process per mutant, nothing reused ---------------------
-    async function referenceEngine(): Promise<void> {
-      const work: Array<{ d: MutantDescriptor; tests: string[]; isStatic: boolean }> = [
-        ...covered.map((p) => ({ d: p.d, tests: p.tests, isStatic: false })),
-        ...statics.map((d) => ({ d, tests: [] as string[], isStatic: true })),
-      ].sort((a, b) => a.d.num - b.d.num);
-      const concurrency = Math.max(1, options.concurrency ?? 1);
-      let next = 0;
-      const worker = async () => {
-        while (next < work.length) {
-          const item = work[next++]!;
-          const { d } = item;
-          // Every test in every file that could reach the mutant, discovery order, no early
-          // exit across files: the slowest correct thing.
-          const perPkg = new Map<string, Set<string>>();
-          const add = (pkgId: string, file: string) => {
-            let set = perPkg.get(pkgId);
-            if (!set) perPkg.set(pkgId, (set = new Set()));
-            set.add(file);
-          };
-          for (const key of item.tests) {
-            const t = tests.get(key)!;
-            add(t.pkg, path.resolve(root, t.file));
-          }
-          if (item.isStatic) for (const [pkgId, fs] of allTestFiles) for (const f of fs) add(pkgId, f);
-          let killedBy: string | undefined;
-          let message: string | undefined;
-          let timeout = false;
-          let tested = 0;
-          const coveredBy: string[] = [];
-          for (const [pkgId, fileSet] of perPkg) {
-            const pkg = runnerPackages.find((p) => p.id === pkgId)!;
-            const wanted = new Set([...fileSet].map((f) => toPosix(f).toLowerCase()));
-            const plan: Record<string, Try[]> = {};
-            for (const t of green) {
-              if (t.pkg !== pkgId) continue;
-              if (!wanted.has(toPosix(path.resolve(root, t.file)).toLowerCase())) continue;
-              if (!item.isStatic && !item.tests.includes(t.key)) continue;
-              plan[t.runnerId] = [{ m: d.num, ...limitsFor(t, d.site) }];
-              coveredBy.push(t.key);
-            }
-            const s = sessionFor(pkg, true);
-            await s.start();
-            try {
-              const budget = 30_000 + Object.keys(plan).reduce((a, id) => a + 5 * (tests.get(`${pkgId}::${id}`)?.duration ?? 0) + 50, 0);
-              const res = await s.run({ id: runId++, mode: 'static', staticMutant: d.num, plan, files: [...fileSet], budgetMs: budget });
-              if (res.timedOut) {
-                timeout = true;
-                killedBy ??= 'wall-clock backstop';
-                continue;
-              }
-              for (const f of res.files) {
-                if (f.error && !killedBy) {
-                  killedBy = `${pkgId}::${relativeTo(root, f.file)}`;
-                  message = `test file failed to load: ${f.error}`;
-                }
-              }
-              for (const t of res.tests) {
-                for (const [, outcome, msg] of t.tries ?? []) {
-                  tested++;
-                  if ((outcome === 'K' || outcome === 'T') && !killedBy) {
-                    killedBy = `${pkgId}::${t.id}`;
-                    timeout = outcome === 'T';
-                    message = msg;
-                  }
-                }
-              }
-            } finally {
-              await s.close();
-            }
-          }
-          const base = { ...d, coveredBy, testsCompleted: tested, ...(item.isStatic ? { static: true } : {}) };
-          if (timeout) results.set(d.num, { ...base, status: 'Timeout', statusReason: message ?? 'declared hung', killedBy: killedBy ? [killedBy] : [] });
-          else if (killedBy) results.set(d.num, { ...base, status: 'Killed', statusReason: message, killedBy: [killedBy] });
-          else if (coveredBy.length === 0) results.set(d.num, { ...base, status: 'NoCoverage' });
-          else results.set(d.num, { ...base, status: 'Survived' });
-          emit({ type: 'progress', decided: decidedCount(), total });
-        }
+        const base: MutantResult = { ...d, status: 'Survived', coveredBy: [...coveredBy].sort(), testsCompleted: tested, ...(isStatic ? { static: true } : {}) };
+        if (timeout) results.set(d.num, { ...base, status: 'Timeout', statusReason: message ?? 'declared hung', killedBy: killedBy ? [killedBy] : [] });
+        else if (killedBy) results.set(d.num, { ...base, status: 'Killed', statusReason: message, killedBy: [killedBy] });
+        else if (coveredBy.size === 0 && !isStatic) results.set(d.num, { ...base, status: 'NoCoverage' });
+        else results.set(d.num, base);
+        emit({ type: 'progress', decided: decidedCount(), total });
       };
-      await Promise.all(Array.from({ length: concurrency }, worker));
+      try {
+        const sorted = list.slice().sort((a, b) => a.d.num - b.d.num);
+        await Promise.all(
+          Array.from({ length: concurrency }, async () => {
+            while (next < sorted.length) await one(sorted[next++]!);
+          }),
+        );
+      } finally {
+        await Promise.all([...shared.values()].map((s) => s.close()));
+      }
     }
   } finally {
     await Promise.all([...warm.values()].map((s) => s.close()));

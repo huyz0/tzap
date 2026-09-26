@@ -1,0 +1,1 @@
+{ "name": "a", "scripts": { "test": "mocha" }, "devDependencies": { "mocha": "^11.0.0" } }

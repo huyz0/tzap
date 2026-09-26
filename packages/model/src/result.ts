@@ -9,6 +9,11 @@ export interface TestInfo {
   file: string;
   /** Milliseconds the test took in the coverage run. */
   duration?: number;
+  /**
+   * Hash of the test file and every file it can import: the cache's key for "nothing this test
+   * can reach has changed".
+   */
+  closure?: string;
 }
 
 export interface SourceFile {

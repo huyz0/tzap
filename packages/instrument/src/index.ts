@@ -3,3 +3,4 @@ export { ALL_MUTATORS, MUTATOR_NAMES, type Mutator, type Placement } from './mut
 export { parse, langOf } from './parse.js';
 export { LineIndex } from './text.js';
 export type { Node } from './ast.js';
+export { aridFilters, ARID_RULES, type AridRule } from './arid.js';

@@ -306,8 +306,22 @@ export const logicalOperator: Mutator = {
     const op = node.operator as string;
     const next = LOGICAL[op];
     if (!next) return [];
-    const r = swapOperator(ctx, node, node.left as Node, node.right as Node, op, next);
-    return r ? [expr(r)] : [];
+    const left = node.left as Node;
+    const right = node.right as Node;
+    const r = swapOperator(ctx, node, left, right, op, next);
+    if (!r) return [];
+    // `a ?? b ?? c` is `(a ?? b) ?? c`; swapping the outer operator yields `a ?? b && c`, which
+    // JavaScript refuses to parse: `??` cannot mix with `&&` or `||` without parentheses.
+    // An operand wrapped in its own parentheses starts after (left) or ends before (right) its parent.
+    const bare = (n: Node) => n.type === 'LogicalExpression' && n.operator === '??' && (n === left ? n.start === node.start : n.end === node.end);
+    if (op === '??' && (bare(left) || bare(right))) {
+      const at = r.length - (node.end - right.start);
+      const l = bare(left) ? `(${ctx.source.slice(left.start, left.end)})` : ctx.source.slice(left.start, left.end);
+      const mid = r.slice(left.end - node.start, at);
+      const rt = bare(right) ? `(${ctx.source.slice(right.start, right.end)})` : ctx.source.slice(right.start, right.end);
+      return [expr(ctx.source.slice(node.start, left.start) + l + mid + rt)];
+    }
+    return [expr(r)];
   },
 };
 

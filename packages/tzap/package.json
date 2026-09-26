@@ -1,11 +1,22 @@
 {
   "name": "tzap",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "description": "Fast, diff-aware mutation testing for TypeScript and JavaScript",
   "type": "module",
-  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "license": "Apache-2.0",
+  "bin": { "tzap": "./dist/bin.js" },
+  "exports": { ".": { "types": "./dist/cli.d.ts", "default": "./dist/cli.js" } },
+  "main": "./dist/cli.js",
+  "types": "./dist/cli.d.ts",
   "files": ["dist"],
-  "dependencies": { "@tzap/model": "workspace:*", "@tzap/core": "workspace:*", "@tzap/git": "workspace:*", "@tzap/report": "workspace:*", "@tzap/discover": "workspace:*", "@tzap/runner-vitest": "workspace:*", "@tzap/instrument": "workspace:*" }
+  "engines": { "node": ">=22.12" },
+  "dependencies": {
+    "@tzap/model": "workspace:*",
+    "@tzap/core": "workspace:*",
+    "@tzap/git": "workspace:*",
+    "@tzap/report": "workspace:*",
+    "@tzap/discover": "workspace:*",
+    "@tzap/runner-vitest": "workspace:*",
+    "@tzap/instrument": "workspace:*"
+  }
 }

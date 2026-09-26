@@ -357,7 +357,7 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
       location: { start: lines.position(c.node.start), end: lines.position(c.node.end) },
       replacement: c.replacement,
       original: truncate(original),
-      description: `${c.mutatorName}: replaced ${truncate(original.replace(/\s+/g, ' '))} with ${c.replacement}`,
+      description: `replaced ${truncate(original.replace(/\s+/g, ' '))} with ${c.replacement}`,
       site: -1,
     };
     if (c.ignoredBy) {

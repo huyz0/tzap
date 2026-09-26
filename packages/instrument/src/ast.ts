@@ -10,7 +10,7 @@ export function isNode(v: unknown): v is Node {
   return typeof v === 'object' && v !== null && typeof (v as Node).type === 'string' && typeof (v as Node).start === 'number';
 }
 
-const SKIP_KEYS = new Set(['type', 'start', 'end', 'loc', 'range', 'parent', 'raw', 'value', 'regex', 'bigint']);
+const SKIP_KEYS = new Set(['type', 'start', 'end', 'loc', 'range', 'parent']);
 
 /** Child nodes in source order. */
 export function children(node: Node): Node[] {
