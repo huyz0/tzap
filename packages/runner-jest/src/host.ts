@@ -39,6 +39,7 @@ let config: string;
 let pkgRoot: string;
 let rootDir: string;
 let envShim = '';
+let jestMajor = 0;
 
 async function init(o: SessionOptions): Promise<void> {
   pkgRoot = path.resolve(o.root, o.pkg.root);
@@ -55,8 +56,8 @@ async function init(o: SessionOptions): Promise<void> {
   }
   const fromJest = createRequire(jestPath);
   const version = (JSON.parse(readFileSync(require.resolve('jest/package.json'), 'utf8')) as { version: string }).version;
-  const major = Number(version.split('.')[0]);
-  if (major !== 30) throw new Error(`tzap supports Jest 30; ${pkgRoot} has Jest ${version}`);
+  const major = (jestMajor = Number(version.split('.')[0]));
+  if (major !== 29 && major !== 30) throw new Error(`tzap supports Jest 29 and 30; ${pkgRoot} has Jest ${version}`);
   const corePath = fromJest.resolve('@jest/core');
   const core = fromJest(corePath) as { runCLI: RunCLI };
   const jestConfig = createRequire(corePath)('jest-config') as {
@@ -135,6 +136,7 @@ async function run(req: RunRequest): Promise<RunResult> {
     mode: req.mode,
     plan: req.plan ?? {},
     staticMutant: req.staticMutant ?? -1,
+    jestMajor,
     killed: new Set(),
     rootDir,
     tests: [],

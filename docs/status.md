@@ -19,6 +19,7 @@ mutant on its fixtures, and each reaching the same verdicts as the others on the
 |---|---|---|
 | Vitest 4.1, 5 | Vitest's `repeats`, driven from public hooks ([spike A](spikes/A-vitest-rerun.md)) | ~56 µs |
 | Jest 30 | jest-circus's own retry loop, from a custom environment ([spike B](spikes/B-jest-warm.md)) | ~80–180 µs |
+| Jest 29 | the same loop, whose retries circus 29 defers to the end of the describe block | ~150 µs (Linux container, where Jest 30 measured ~490 µs) |
 | node:test | a shim registering each planned test once per try; fresh test-file URLs, warm code under test | ~77–119 µs |
 | Mocha 12 | Mocha's own retry loop | ~37 µs |
 
@@ -49,8 +50,8 @@ the published schema, rendering in the standard viewer), self-contained HTML, Gi
 annotations, SARIF, markdown. Exit codes 0/1/2/3 as jzap's.
 
 **One published package**: the internal packages bundled into `tzap`, installed from its tarball
-into fresh projects outside the repository and run on Vitest, node:test and Mocha fixtures by
-`scripts/pack-smoke.mjs`; Jest checked the same way by hand. Node 22.23, 24.21 and 26.7.
+into fresh projects outside the repository and run on Vitest, node:test, Mocha, Jest 30 and Jest 29
+fixtures by `scripts/pack-smoke.mjs`. Node 22.22, 22.23, 24.21 and 26.7.
 
 ### Soundness, and what it took
 
@@ -122,7 +123,7 @@ better read as 6–7x.
 | Publishing to npm — the bundle and tarball are verified, but publishing needs the owner's npm account | M24 |
 | tzap's own pull-request job (mutation testing of the diff) — the workflow has it, but it runs only on pull requests and none has been opened | M0 |
 | A 30-day dogfood on external projects (tzap has been run on itself and on three libraries) | M24 |
-| Jest 29, Vitest browser mode, Angular templates, Astro, Karma | M17, M19 |
+| Vitest browser mode, Angular templates, Astro, Karma | M19 |
 
 ## Known limitations
 

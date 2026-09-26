@@ -30,7 +30,15 @@ const expected = 'tzap: 6 survived, 3 uncovered of 37 mutants (score 75.7%, stre
 try {
   // SMOKE_ONLY=sample-node checks one fixture.
   const only = process.env.SMOKE_ONLY?.split(',');
-  for (const [fixture, extra] of [['sample-vitest', ['vitest@5.0.2']], ['sample-node', []], ['sample-mocha', ['mocha@12.0.2']]]) {
+  const babel = ['@babel/core@7.29.7', '@babel/preset-env@7.29.7', '@babel/preset-typescript@7.29.7'];
+  const fixtures = [
+    ['sample-vitest', ['vitest@5.0.2']],
+    ['sample-node', []],
+    ['sample-mocha', ['mocha@12.0.2']],
+    ['sample-jest', ['jest@30.5.2', ...babel]],
+    ['sample-jest29', ['jest@29.7.0', ...babel]],
+  ];
+  for (const [fixture, extra] of fixtures) {
     if (only && !only.includes(fixture)) continue;
     const dir = setUp(fixture, extra);
     const out = run('npx', ['tzap', 'run', '-q', '-r', 'agent'], dir);

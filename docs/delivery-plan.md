@@ -67,7 +67,7 @@ building; what building it changed is recorded at the end rather than edited in.
 | M14 Diff scoping | **Done**: git and patch scoping, coverage narrowed to tests that can import the change |
 | M15 Reporters + 0.1 | **Done** except publishing: eight reporters; the package is bundled and smoke-tested from its tarball; `npm publish` needs the owner's account |
 | M16 node:test | **Done** |
-| M17 Jest | **Done** (Jest 30; 29 refused with a message) |
+| M17 Jest | **Done** (Jest 29 and 30) |
 | M18 Mocha; Bun/Deno | **Done**: Mocha 12; [Bun and Deno: not now](spikes/C-bun-deno.md) |
 | M19 Frontend | **Done** for React/TSX, Vue, Svelte under jsdom; Angular templates and Astro not |
 | M20 Monorepo | **Done** |

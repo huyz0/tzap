@@ -10,6 +10,10 @@
  * (`test.invocations` numbers the tries); at `test_done` it records the outcome and then either
  * leaves the test failed (pushing a marker error if it passed) so circus runs the next try, or,
  * after the last try, clears the errors so the test reports green.
+ *
+ * Jest 29's circus has no `RETRY_IMMEDIATELY`: it runs a failed test's retries after the other
+ * tests of its describe block. Every retry is still the full cycle, so the same handler works; a
+ * test's first try runs in its place, the rest after its siblings' first tries.
  */
 import type { TzapRuntime } from '@tzap/runtime';
 import runtime = require('@tzap/runtime');
@@ -43,6 +47,7 @@ interface CircusTest {
   type: 'test';
   name: string;
   mode?: string;
+  concurrent?: boolean;
   parent: CircusBlock;
   errors: unknown[];
   invocations: number;
@@ -157,6 +162,9 @@ function extend(Base: Env): Env {
             walk(child, [...names, child.name]);
             continue;
           }
+          // Jest 29 starts a concurrent test's body once, ahead of the loop, and a retry awaits
+          // that same promise again: only the first try would run. Such tests run in sequence.
+          if (run.jestMajor < 30) child.concurrent = false;
           const name = [...names, child.name].join(' > ');
           const n = seen.get(name) ?? 0;
           seen.set(name, n + 1);

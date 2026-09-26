@@ -17,7 +17,7 @@ untested; a result from it should be checked against `--engine reference` before
 |---|---|---|
 | Vitest | 5.0.2 | supported: `isolate` either way, threads and forks pools, `test.projects` at the root |
 | Vitest | 4.1.x | runs (used for the StrykerJS comparison); not in the CI matrix |
-| Jest | 30.5 | supported, in band; Jest 29 refused with a message (its runner lacks the retry hook tzap drives) |
+| Jest | 30.5, 29.7 | supported, in band. On 29, `test.concurrent` tests run one at a time (as on 30), with their `beforeEach`/`afterEach` around them |
 | node:test | Node 22.15+ | supported; TypeScript tests through Node's own type stripping only |
 | Mocha | — | in progress |
 | Bun, Deno | — | not supported; see [spikes/C-bun-deno.md](spikes/C-bun-deno.md) |

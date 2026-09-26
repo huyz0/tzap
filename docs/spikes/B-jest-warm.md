@@ -155,8 +155,9 @@ symbols read at the start of each describe block's run; the immediate retry loop
 `test.errors` is non-empty; `test.invocations` incremented at `test_start`; `handleTestEvent`
 awaited, after circus's own handler, with `state` as its second argument; `test_done` dispatched
 after afterEach hooks and after the expected-assertions check; `state.maxConcurrency` read when
-a concurrent group starts. Jest 29 lacks `RETRY_IMMEDIATELY` (retries are deferred to the end of
-the describe block, which breaks the per-test cycle), so the adapter refuses anything but Jest 30.
+a concurrent group starts. Jest 29 lacks `RETRY_IMMEDIATELY`: retries are deferred to the end of
+the describe block. This was first read as breaking the per-test cycle; it does not (see the last
+follow-up).
 
 ## Follow-ups this creates
 
@@ -176,6 +177,11 @@ the describe block, which breaks the per-test cycle), so the adapter refuses any
   (a `.tzap-snap-*` test directory, and StrykerJS's default `.stryker-tmp` sandbox, which
   therefore found no tests on this fixture; the benchmark sets `tempDirName: "stryker-tmp"`).
   Cause not investigated.
-- Jest 29.7's jest-circus has no `RETRY_IMMEDIATELY` (checked in its `build/run.js`): supporting
-  Jest 29 needs another loop mechanism, e.g. cloning planned tests into the describe block at
-  `run_start`.
+- Jest 29.7's jest-circus has no `RETRY_IMMEDIATELY` (checked in its `build/run.js`). **Done
+  without another mechanism:** its deferred loop still runs each retry as a full `_runTest`
+  (`test_retry` clears the errors, `test_start` increments `invocations`), so the same environment
+  drives it; a test's later tries run after its siblings' first tries, each still bracketed by
+  controls. `fixtures/sample-jest29` passes the session tests and the warm/reference agreement.
+  One difference: circus 29 starts a concurrent test's body once and a retry awaits the same
+  promise, so on 29 the environment clears `concurrent` at `run_start` and those tests run in
+  sequence.

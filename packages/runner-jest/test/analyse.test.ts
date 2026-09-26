@@ -1,5 +1,6 @@
 /**
- * End to end: the engine's `analyse()` on fixtures/sample-jest through the Jest adapter. The warm
+ * End to end: the engine's `analyse()` on fixtures/sample-jest (Jest 30) and fixtures/sample-jest29
+ * (Jest 29) through the Jest adapter. The warm
  * engine must agree with the reference engine (a fresh session per mutant) on every mutant, and
  * the survivors must be the ones derived by hand for the fixture (the same as sample-vitest's).
  */
@@ -11,22 +12,22 @@ import { describe, expect, it } from 'vitest';
 import { createJestSession } from '../dist/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const root = path.resolve(here, '../../../fixtures/sample-jest').split(path.sep).join('/');
-const model: ProjectModel = {
+const model = (name: string): ProjectModel => ({
   schemaVersion: 1,
-  root,
-  packages: [{ id: 'sample-jest', root: '.', sources: ['src/**/*.ts'], runner: { kind: 'jest' } }],
-};
+  root: path.resolve(here, `../../../fixtures/${name}`).split(path.sep).join('/'),
+  packages: [{ id: name, root: '.', sources: ['src/**/*.ts'], runner: { kind: 'jest' } }],
+});
 
-const run = (engine: 'warm' | 'reference') => analyse(model, { engine, runners: { jest: createJestSession }, tzapVersion: '0.0.0-test', concurrency: 4 });
+const run = (name: string, engine: 'warm' | 'reference') =>
+  analyse(model(name), { engine, runners: { jest: createJestSession }, tzapVersion: '0.0.0-test', concurrency: 4 });
 const verdicts = (r: AnalysisResult) => r.mutants.map((m) => `${m.id} ${m.status}`);
 const describeMutant = (m: AnalysisResult['mutants'][number]) =>
   `${m.file}:${m.location.start.line} ${m.mutatorName} ${m.replacement}`;
 
-describe('analyse() on sample-jest', () => {
+describe.each(['sample-jest', 'sample-jest29'])('analyse() on %s', (name) => {
   it('warm and reference agree, and the survivors are the hand-derived ones', async () => {
-    const warm = await run('warm');
-    const reference = await run('reference');
+    const warm = await run(name, 'warm');
+    const reference = await run(name, 'reference');
     expect(verdicts(warm)).toEqual(verdicts(reference));
     expect(warm.redTests).toEqual([]);
     expect(warm.tests).toHaveLength(5);
