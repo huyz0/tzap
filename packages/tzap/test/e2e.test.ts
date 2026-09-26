@@ -154,6 +154,29 @@ describe('the cache', () => {
   }, 180_000);
 });
 
+describe('the cache and static mutants', () => {
+  it('reuses a static survivor when an edit elsewhere cannot reach the tests that decided it', async () => {
+    const root = path.join(scratch, 'hazards-edit');
+    cpSync(fixture('hazards-vitest'), root, { recursive: true, filter: (s) => !s.includes('node_modules') });
+    const m = model(root);
+    const dir = path.join(scratch, 'cache-static');
+    const settings = { tzapVersion: 'test', mutators: undefined, filters: [] };
+    const c1 = loadCache(dir, m, settings);
+    const first = await run(m, { reuse: (d, cov) => c1.reuse(d, cov) });
+    saveCache(c1, first);
+    // slug() mutants are static survivors decided by slug.test.ts; loops.ts is not imported by it.
+    const file = path.join(root, 'src/loops.ts');
+    writeFileSync(file, readFileSync(file, 'utf8').replace('let steps = 0;', 'let steps = 0; // edited'));
+    const c2 = loadCache(dir, m, settings);
+    const second = await run(m, { reuse: (d, cov) => c2.reuse(d, cov) });
+    const slug = second.mutants.filter((x) => x.file.endsWith('constants.ts') && x.location.start.line >= 12 && x.status === 'Survived');
+    expect(slug.length).toBeGreaterThan(0);
+    expect(slug.every((x) => x.static && x.cached)).toBe(true);
+    const fresh = await run(m);
+    expect(verdicts(second)).toEqual(verdicts(fresh));
+  }, 300_000);
+});
+
 describe('diff scoping', () => {
   it('analyses only mutants on the changed lines', async () => {
     const lines = new Map([['fixtures/sample-vitest/src/discount.ts', [[5, 5]] as const]]);

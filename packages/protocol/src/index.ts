@@ -137,7 +137,7 @@ export type HostRequest =
   | { type: 'close' };
 
 export type HostResponse =
-  | { type: 'ready'; runnerVersion: string }
+  | { type: 'ready'; runnerVersion: string; isolatesFiles?: boolean }
   | { type: 'result'; result: RunResult }
   | { type: 'files'; files: string[] }
   | { type: 'progress'; runId: number; test: string; mutant: number }

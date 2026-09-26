@@ -25,6 +25,8 @@ export interface FileNode {
   packages: string[];
   /** A computed import or require makes this file's reach unknowable. */
   dynamic: boolean;
+  /** The module may keep mutable state between calls: see `mayHoldState`. */
+  stateful: boolean;
   hash: string;
 }
 
@@ -56,15 +58,16 @@ export function resolveLocal(from: string, spec: string): string | undefined {
   return undefined;
 }
 
-function specifiers(file: string, source: string): { specs: string[]; dynamic: boolean } {
+function specifiers(file: string, source: string): { specs: string[]; dynamic: boolean; stateful: boolean } {
   const specs: string[] = [];
   let dynamic = false;
   let r: ReturnType<typeof parseSync>;
   try {
     r = parseSync(file, source, { preserveParens: false });
   } catch {
-    return { specs, dynamic: true };
+    return { specs, dynamic: true, stateful: true };
   }
+  const stateful = mayHoldState(r.program as unknown as { body: StmtNode[] });
   const mod = r.module as unknown as {
     staticImports: Array<{ moduleRequest: { value: string } }>;
     staticExports: Array<{ entries: Array<{ moduleRequest?: { value: string } | null }> }>;
@@ -81,7 +84,79 @@ function specifiers(file: string, source: string): { specs: string[]; dynamic: b
   // require() is not in oxc's module record; a light scan is enough for literal specifiers.
   for (const m of source.matchAll(/\brequire\s*\(\s*(['"`])([^'"`$\n]*)\1\s*\)/g)) specs.push(m[2]!);
   if (/\brequire\s*\(\s*[^'"`\s)]/.test(source)) dynamic = true;
-  return { specs, dynamic };
+  return { specs, dynamic, stateful };
+}
+
+interface StmtNode {
+  type: string;
+  [k: string]: unknown;
+}
+
+/**
+ * Whether a module may keep mutable state between calls — what a warm run of a test can leave
+ * behind for the next run to find. Syntactic and deliberately broad: any top-level `let`/`var`,
+ * a `const` holding an object, array, instance or call result, a class with static fields, or a
+ * top-level statement run for its side effect. A module of functions, classes and constant
+ * primitives cannot hold state; nearly anything else might.
+ */
+export function mayHoldState(program: { body: StmtNode[] }): boolean {
+  const statelessInit = (init: StmtNode | null | undefined): boolean => {
+    if (!init) return true;
+    switch (init.type) {
+      case 'Literal':
+        return !(init.regex && /[gy]/.test((init.regex as { flags: string }).flags));
+      case 'TemplateLiteral':
+        return (init.expressions as unknown[]).length === 0;
+      case 'ArrowFunctionExpression':
+      case 'FunctionExpression':
+      case 'Identifier':
+        return true;
+      case 'ClassExpression':
+        return !hasStaticState(init);
+      case 'UnaryExpression':
+        return statelessInit(init.argument as StmtNode);
+      case 'TSAsExpression':
+      case 'TSSatisfiesExpression':
+        return statelessInit(init.expression as StmtNode);
+      default:
+        return false;
+    }
+  };
+  const hasStaticState = (cls: StmtNode): boolean =>
+    ((cls.body as { body: StmtNode[] }).body ?? []).some((m) => (m.type === 'PropertyDefinition' && m.static === true && m.value != null) || m.type === 'StaticBlock');
+  const statement = (s: StmtNode): boolean => {
+    switch (s.type) {
+      case 'ImportDeclaration':
+      case 'FunctionDeclaration':
+      case 'TSInterfaceDeclaration':
+      case 'TSTypeAliasDeclaration':
+      case 'TSEnumDeclaration':
+      case 'TSDeclareFunction':
+      case 'EmptyStatement':
+      case 'ExportAllDeclaration':
+        return false;
+      case 'ClassDeclaration':
+        return hasStaticState(s);
+      case 'VariableDeclaration':
+        if (s.declare === true) return false;
+        if (s.kind !== 'const') return true;
+        return !(s.declarations as StmtNode[]).every((d) => statelessInit(d.init as StmtNode | null));
+      case 'ExportNamedDeclaration':
+        return s.declaration ? statement(s.declaration as StmtNode) : false;
+      case 'ExportDefaultDeclaration': {
+        const d = s.declaration as StmtNode;
+        if (d.type === 'FunctionDeclaration' || d.type === 'FunctionExpression' || d.type === 'ArrowFunctionExpression') return false;
+        if (d.type === 'ClassDeclaration' || d.type === 'ClassExpression') return hasStaticState(d);
+        return !statelessInit(d);
+      }
+      case 'ExpressionStatement':
+        // "use strict" is a directive, not an effect.
+        return typeof s.directive !== 'string';
+      default:
+        return true;
+    }
+  };
+  return program.body.some(statement);
 }
 
 export class ImportGraph {
@@ -102,9 +177,11 @@ export class ImportGraph {
     const imports: string[] = [];
     const packages: string[] = [];
     let dynamic = false;
+    let stateful = false;
     if (/\.(m|c)?[jt]sx?$|\.vue$|\.svelte$/.test(key)) {
       const s = specifiers(key, source);
       dynamic = s.dynamic;
+      stateful = s.stateful;
       for (const spec of s.specs) {
         if (spec.startsWith('.') || spec.startsWith('/')) {
           const r = resolveLocal(key, spec);
@@ -120,7 +197,7 @@ export class ImportGraph {
         if (this.options.workspacePackages?.has(pkgName)) packages.push(pkgName);
       }
     }
-    n = { file: key, imports: [...new Set(imports)].sort(), packages: [...new Set(packages)].sort(), dynamic, hash };
+    n = { file: key, imports: [...new Set(imports)].sort(), packages: [...new Set(packages)].sort(), dynamic, stateful, hash };
     this.nodes.set(key, n);
     return n;
   }

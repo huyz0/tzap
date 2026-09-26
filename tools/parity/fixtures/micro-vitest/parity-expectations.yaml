@@ -1,0 +1,33 @@
+# Hand-written expected outcomes, independent of both tools (docs/parity-and-benchmarks.md §2:
+# a hand-written expectation always outranks Stryker). compare.mjs checks both tools against
+# each entry; a tzap miss fails the gate (it is a tzap bug by definition), a Stryker miss is
+# reported as evidence for a class-B entry.
+#   key      glob over the normalised key <file>|<mutator>|<l:c>-<l:c>|<replacement>
+#   status   expected status, or `absent` (the mutant must not be generated)
+expectations:
+  - key: "src/logical.ts|LogicalOperator|4:10-4:21|(a||b)&&c"
+    status: Killed
+    note: The outer || of a left-nested chain mutated to && is (a || b) && c; any3(true,false,false) is then false.
+  - key: "src/logical.ts|LogicalOperator|4:10-4:21|a||b&&c"
+    status: absent
+    note: a || (b && c) is not the LogicalOperator mutant of (a || b) || c; it is a precedence change.
+  - key: "src/each.ts|CallExpression|5:3-7:6|;"
+    status: absent
+    note: Stryker 10's CallExpression filter drops the call when another mutant (the callback's BlockStatement) is in its subtree.
+  - key: "src/rules.ts|BlockStatement|4:47-6:2|{}"
+    status: Killed
+    note: Static mutant; the test file fails to load, so the suite fails.
+  - key: "src/rules.ts|ArrayDeclaration|7:22-7:37|[]"
+    status: Killed
+    note: Static mutant; RULES[0] is undefined at load, the test file fails to load, so the suite fails.
+  - key: "src/each2.ts|CallExpression|6:5-8:8|;"
+    status: absent
+    note: >
+      Same rule as each.ts, with the forEach statement inside an arrow function that is an array
+      element (the shape of superjson transformer.ts:95/109). Stryker 10.0.0 keeps this mutant
+      although the callback's BlockStatement mutant is in its subtree; it drops it in each.ts.
+  - key: "src/timer.ts|ConditionalExpression|13:9-13:15|true"
+    status: [Killed, RuntimeError]
+    note: >
+      `!armed` -> `true` makes the timer throw during the test. The test passes, but Vitest
+      reports an uncaught exception and fails the run; the mutant is detected, not Survived.

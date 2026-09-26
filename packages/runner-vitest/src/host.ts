@@ -132,7 +132,10 @@ async function init(o: SessionOptions): Promise<void> {
   (vitest as { version?: string }).version = vitestPkg.version;
 
 
-  send({ type: 'ready', runnerVersion: vitestPkg.version });
+  // With isolation on (Vitest's default), every run re-imports each test file's modules, so this
+  // same session can decide static mutants without a second, isolated one.
+  const isolate = (vitest as unknown as { config: { isolate?: boolean } }).config.isolate !== false;
+  send({ type: 'ready', runnerVersion: vitestPkg.version, isolatesFiles: isolate && o.isolate !== false });
 }
 
 const CONFIG_NAMES = ['vitest.config', 'vite.config'].flatMap((b) => ['ts', 'mts', 'cts', 'js', 'mjs', 'cjs'].map((e) => `${b}.${e}`));

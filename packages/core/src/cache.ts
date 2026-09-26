@@ -7,8 +7,9 @@
  * - Killed / Timeout (from a loop or hit guard): reused when the killing test still reaches the
  *   mutant and nothing that test can reach has changed (its import-closure hash is the same).
  * - Survived: reused when exactly the same tests reach it and none of their closures changed.
- * - Never reused: a wall-clock Timeout (not reproducible), RuntimeError, and static mutants
- *   other than killed ones, which have no per-test coverage to reason about.
+ *   For a static mutant, "reach" means every test of the files that load it: the tests an
+ *   isolated run decides it with.
+ * - Never reused: a wall-clock Timeout (not reproducible) and RuntimeError.
  * The cache records the toolchain that wrote it and is ignored under a different one.
  */
 import { createHash } from 'node:crypto';
@@ -152,6 +153,12 @@ export function loadCache(dir: string, model: ProjectModel, settings: CacheSetti
         if (!killer) return undefined;
         if (e.static ? !coverage.static : !coverage.tests.includes(killer)) return undefined;
         if (!closureSame(killer)) return undefined;
+        return { ...m, ...e, status: e.status };
+      }
+      // A static survivor: the isolated runs that decided it ran exactly these tests.
+      if (e.status === 'Survived' && e.static && coverage.static && coverage.ran) {
+        if (!sameSet(e.coveredBy, coverage.ran)) return undefined;
+        if (!coverage.ran.every(closureSame)) return undefined;
         return { ...m, ...e, status: e.status };
       }
       if (e.status === 'Survived' && !e.static && !coverage.static) {

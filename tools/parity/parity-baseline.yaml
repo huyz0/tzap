@@ -1,0 +1,141 @@
+# Accepted differences between tzap and StrykerJS 10.0.0, each with its justification.
+#
+# Classification (docs/parity-and-benchmarks.md §4):
+#   A - tzap bug            never baselined: fixed, or (while open) listed in the triage report
+#   B - Stryker limitation  documented with its issue/mechanism; a Tier A fixture proves tzap right
+#   C - intentional         a deliberate semantic difference, justified here
+#   D - nondeterminism      in the project under test; quarantined, reported as a test-quality signal
+#
+# Each entry: id, kind (tzap-only | stryker-only | verdict | coveredBy | killedBy), project
+# (glob over corpus project names), key (glob over `<file>|<mutator>|<l:c>-<l:c>|<replacement>`,
+# `*` matches anything including `/` and `|`), optional `stryker:` / `tzap:` status filters for
+# verdict entries, classification, note.
+#
+# Matched by key, not counted: a baseline that only counted accepted differences would absorb a
+# different difference of the same size. compare.mjs fails on any difference no entry covers,
+# AND on any entry (whose project glob covers a compared project) that no longer matches
+# anything: behaviour moved and nobody noticed. Flaky mutants (verdict flipped between a tool's
+# own two runs) are quarantined by compare.mjs and are not gated here.
+
+accepted:
+  # --- B: StrykerJS limitations --------------------------------------------------------------
+
+  - id: B1-order-dependent-test-run-in-isolation
+    kind: verdict
+    project: hazards-vitest
+    key: "src/math.ts|EqualityOperator|3:7-3:13|n>=hi"
+    stryker: Killed
+    tzap: Survived
+    classification: B
+    note: >
+      Stryker's perTest independence assumption (research/stryker-js.md §10). `n > hi` ->
+      `n >= hi` in clamp() is an equivalent mutant (at n == hi both return hi). One of its
+      covering tests, test/order.test.ts "remembers the clamped value", depends by design on the
+      earlier test "clamps below" having set a file-level variable. Stryker runs only the
+      covering tests (a testNamePattern over tests 4, 5, 13), so the dependent test runs without
+      its predecessor, reads `undefined`, computes NaN and fails ("expected NaN to be 10"): a
+      false kill unrelated to the mutant. tzap executes the test inside a run of its file in
+      which the predecessor has run (warm engine: tries are made inside whole-file runs;
+      reference engine: testsCompleted 9), so the mutant survives, which is correct. The Tier A
+      hazards fixture (fixtures/hazards-vitest, order.test.ts) is the hand-written case.
+
+  - id: B2-static-mutant-breaks-module-load-reported-survived
+    kind: verdict
+    project: "*"
+    key: "*"
+    stryker: Survived
+    tzap: Killed
+    classification: B
+    note: >
+      Static mutants that make a source module throw while it loads (superjson
+      src/transformer.ts:45 `simpleTransformation` body emptied -> `simpleRules` holds
+      undefined -> reading `.annotation` at load throws; micro-vitest src/rules.ts). Every test
+      file importing the module fails to load. @stryker-mutator/vitest-runner 10.0.0's run()
+      collects results only from tests (collectTestsFromSuite over state.getFiles()); a file
+      that fails to import has no tests, its error is a file-level error that is not in
+      state.errorsSet, so the run is "Complete" with zero failures and the mutant is reported
+      Survived. tzap reports Killed ("test file failed to load: ..."). Hand-written expectation
+      in tools/parity/fixtures/micro-vitest (src/rules.ts, BlockStatement and ArrayDeclaration):
+      Killed; tzap meets it, Stryker misses it. Matched on the status pair only: Stryker
+      Survived vs tzap Killed has no other cause in the corpus so far -- re-check the status
+      reasons in the report whenever this entry matches a new mutant.
+
+  - id: B3-stryker-callexpression-filter-inconsistent
+    kind: stryker-only
+    project: [superjson, micro-vitest]
+    key: "*|CallExpression|*|;"
+    classification: B
+    note: >
+      Stryker 10 documents (and implements via `filter(mutantsInScope) => length === 1`) that a
+      CallExpression mutant is dropped when any other mutant is in the call's subtree. For a
+      call statement inside an arrow function that is itself an array element (superjson
+      src/transformer.ts:95 and :109, `superJson.allowedErrorProps.forEach(prop => {...})`,
+      reproduced in fixtures/micro-vitest src/each2.ts) Stryker 10.0.0 keeps the `;` mutant
+      although the callback's BlockStatement mutant is in its subtree; for the same statement
+      at top level of a function declaration (src/each.ts) it drops it. tzap applies the
+      documented rule consistently. Hand-written expectation (each.ts and each2.ts: absent):
+      tzap meets both, Stryker misses each2.ts. The subtree bookkeeping in Stryker's
+      babel-transformer (enter/exit stack of mutant-collector offsets) is the likely site.
+
+  # --- C: intentional differences ------------------------------------------------------------
+
+  - id: C1-hang-budget-killed-vs-timeout
+    kind: verdict
+    project: "*"
+    key: "*"
+    stryker: Killed
+    tzap: Timeout
+    classification: C
+    note: >
+      Runaway recursion/loops: Stryker lets the mutant run until V8 throws "Maximum call stack
+      size exceeded" (or an assertion fails), which kills it; tzap's per-site hit budget (a
+      multiple of the site's hits in the coverage run, with a floor) fires first and declares
+      the mutant hung. Seen in superjson on includes()/isArray/recursion-guard mutants
+      (plainer.ts:41, :230, :260; util.ts:48-49; accessDeep.ts:5). Both statuses count as
+      detected; the difference is only which budget trips first. Status reasons in the report
+      show "Maximum call stack size exceeded" / "expected ... to throw" vs "declared hung".
+
+  - id: C2-hang-budget-timeout-vs-killed
+    kind: verdict
+    project: "*"
+    key: "*"
+    stryker: Timeout
+    tzap: Killed
+    classification: C
+    note: >
+      The converse of C1: Stryker's hit limit (100 x dry-run hits: "Hit limit reached
+      (1501/1500)") fires on a slow-but-terminating mutant which tzap's larger budget lets
+      finish, and the test then fails on its assertion (superjson accessDeep.ts:7 `n > 0` ->
+      `n <= 0`). Both statuses count as detected.
+
+  - id: C3-arrowfunction-coverage-is-body-execution
+    kind: coveredBy
+    project: "*"
+    key: "*|ArrowFunction|*"
+    classification: C
+    note: >
+      Stryker places the ArrowFunction mutant on the arrow expression, so a test "covers" it
+      when the arrow is merely created; tzap's arrow-body placement (mutator-mapping.yaml)
+      counts coverage only when the body executes. Stryker's covering set is therefore a
+      superset (superjson plainer.ts:93, util.ts:45: extra tests that create but never call the
+      callback). Verdicts agree; a test that never calls the arrow cannot kill `() => undefined`.
+
+  - id: C4-unhandled-error-fails-the-run
+    kind: verdict
+    project: "*"
+    key: "*"
+    stryker: RuntimeError
+    tzap: Killed
+    classification: C
+    note: >
+      Formerly class-A finding A3. A mutant whose only effect is an uncaught exception (thrown
+      from a timer callback while the test awaits) passes every test, but Vitest reports the
+      exception and the run fails with exit 1. Stryker reports RuntimeError, outside its score;
+      tzap reports Killed, because a suite that fails with the mutant has detected it -- the
+      build goes red. tzap decides such a mutant on its own in an isolated run, so the error is
+      attributable, and ignores unhandled errors in a package whose suite already has them with
+      no mutant active. Seen on remeda src/debounce.ts; repro fixtures/micro-vitest src/timer.ts.
+
+# Open class-A tzap bugs (never accepted). None: A1 (Vitest 4.1 reporters), A2 (logical-chain
+# precedence) and A3 (uncaught exceptions) are fixed in tzap; see reports/TRIAGE.md.
+open_tzap_bugs: []

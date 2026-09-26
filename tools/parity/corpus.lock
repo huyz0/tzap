@@ -1,0 +1,122 @@
+# The parity corpus, pinned. Never a floating ref: Tier B projects are exact commits.
+#
+# Per project:
+#   name                 corpus directory name (tools/parity/corpus/<name>) and report name
+#   tier                 A (hand-written microfixtures in this repo) or B (real libraries)
+#   path | git+commit    Tier A: path relative to the tzap repo root. Tier B: clone URL + SHA.
+#   subdir               (optional) package directory inside the clone
+#   licence              Tier B: SPDX id, checked at pin time
+#   vitest               Vitest version installed in the copy (default: top-level `vitest`)
+#   keepDevDependencies  (optional) devDependencies kept from the project; others are dropped
+#   addDevDependencies   (optional) extra devDependencies
+#   remove               (optional) paths deleted from the copy
+#   files                (optional) files written into the copy (e.g. a parity Vitest config)
+#   vitestConfig         (optional) Vitest config file both tools use
+#   mutate / exclude     globs (package-relative) of files BOTH tools mutate: Stryker gets
+#                        `mutate: [...mutate, ...exclude.map(g => '!' + g)]`, tzap a project
+#                        model with `sources: mutate, exclude: exclude`
+#   timeoutMS            (optional) Stryker timeoutMS override
+#
+# The npm lockfile each copy resolved to is saved in locks/<name>.package-lock.json and
+# reused with `npm ci`, so transitive dependencies are pinned too once a project is added.
+
+node: 26.7.0
+stryker: 10.0.0
+vitest: 4.1.11
+
+# Harness-side workarounds for open class-A tzap bugs, so the comparison can proceed. Each is
+# inert for Stryker; turn it off once the bug is fixed and re-run.
+workarounds:
+  A1: false  # fixed in @tzap/runner-vitest (one inert reporter instead of an empty list)
+
+projects:
+  - name: sample-vitest
+    tier: A
+    path: fixtures/sample-vitest
+    mutate: ['src/**/*.ts']
+    exclude: []
+
+  - name: hazards-vitest
+    tier: A
+    path: fixtures/hazards-vitest
+    mutate: ['src/**/*.ts']
+    exclude: []
+
+  - name: superjson
+    tier: B
+    git: https://github.com/flightcontrolhq/superjson
+    commit: aaa65e36e8e31da740265a56b27c965ca1c7b754
+    licence: MIT
+    keepDevDependencies: ['@types/node', 'decimal.js', 'mongodb', 'typescript']
+    mutate: ['src/**/*.ts']
+    exclude: ['src/**/*.test.ts', 'src/**/*.spec.ts']
+    # Ported from Vitest 0.34 to 4.1: Vitest 4 compares Error `name` in toEqual, so the two
+    # Error round-trip cases (which check name/message in their own output callback) opt out
+    # of the generic deep-equality check; inline snapshots are re-recorded (formatting only).
+    patches:
+      - file: src/index.test.ts
+        find: "'works for Errors': {"
+        replace: "'works for Errors': { dontExpectEquality: true,"
+      - file: src/index.test.ts
+        find: "'works for Error causes': {"
+        replace: "'works for Error causes': { dontExpectEquality: true,"
+    updateSnapshots: true
+
+  - name: es-toolkit
+    tier: B
+    git: https://github.com/toss/es-toolkit
+    commit: ee72fc74b763d8cb48095e1981a5bcef19ba5cee
+    licence: MIT
+    # Subset: the string and math modules (both tools mutate the same files, and both run only
+    # those modules' specs through the parity Vitest config). The full suite (~1500 files,
+    # compat layer) is out of scope for a parity run.
+    keepDevDependencies: ['@types/node', 'fast-check', 'typescript']
+    remove: [benchmarks, docs, .scripts, es-toolkit-plugin]
+    vitestConfig: vitest.subset.config.mts
+    files:
+      vitest.subset.config.mts: |
+        import { defineConfig } from 'vitest/config';
+        export default defineConfig({
+          test: {
+            include: ['src/string/**/*.spec.ts', 'src/math/**/*.spec.ts'],
+            watch: false,
+          },
+        });
+    mutate: ['src/string/**/*.ts', 'src/math/**/*.ts']
+    exclude: ['src/**/*.spec.ts', 'src/**/index.ts']
+
+  - name: remeda
+    tier: B
+    git: https://github.com/remeda/remeda
+    commit: e8292ddf03f8a334cf8b048983d518f89fe6be97
+    subdir: packages/remeda
+    licence: MIT
+    # Subset: functions whose file name starts with a-d, and their runtime tests. The project's
+    # `types` (typecheck-only) and `prop` projects are left out. The project's runtime project
+    # sets `isolate: false`; the parity config uses Vitest's default (isolate: true) because
+    # Stryker's Vitest runner cannot attribute per-test coverage without isolation: with the
+    # project's setting, Stryker 10.0.0 reported 290 of 378 mutants NoCoverage (tzap: 2) and 9
+    # RuntimeError ("Test runner crashed ... Cannot convert object to primitive value" in
+    # @stryker-mutator/util errorToString). See reports/remeda.md.
+    keepDevDependencies: ['@types/node', 'type-fest', 'typescript', 'vite-tsconfig-paths', '@fast-check/vitest']
+    vitestConfig: vitest.subset.config.ts
+    files:
+      vitest.subset.config.ts: |
+        import tsconfigPaths from 'vite-tsconfig-paths';
+        import { defineConfig } from 'vitest/config';
+        export default defineConfig({
+          plugins: [tsconfigPaths()],
+          test: {
+            include: ['src/[a-d]*.test.ts'],
+          },
+        });
+    mutate: ['src/[a-d]*.ts']
+    exclude: ['src/**/*.test.ts', 'src/**/*.test-d.ts', 'src/**/*.test-prop.ts']
+
+  - name: micro-vitest
+    tier: A
+    # Microfixtures written for this harness, each with a hand-written expected outcome in
+    # parity-expectations.yaml (one per difference category found in Tier B).
+    path: tools/parity/fixtures/micro-vitest
+    mutate: ['src/**/*.ts']
+    exclude: []

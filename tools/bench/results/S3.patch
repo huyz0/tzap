@@ -1,0 +1,31 @@
+diff --git a/src/collections23.ts b/src/collections23.ts
+--- a/src/collections23.ts
++++ b/src/collections23.ts
+@@ -9,2 +9,2 @@
+-export function total23(xs: number[]): number { // before
+-  return xs.reduce((a, b) => a + b, 0); // before
++export function total23(xs: number[]): number {
++  return xs.reduce((a, b) => a + b, 0);
+@@ -13,2 +13,2 @@
+-export function unique23(xs: string[]): string[] { // before
+-  return [...new Set(xs)].sort(); // before
++export function unique23(xs: string[]): string[] {
++  return [...new Set(xs)].sort();
+@@ -17,1 +17,1 @@
+-export function countByLength23(xs: string[]): Record<number, number> { // before
++export function countByLength23(xs: string[]): Record<number, number> {
+diff --git a/src/model28.ts b/src/model28.ts
+--- a/src/model28.ts
++++ b/src/model28.ts
+@@ -14,2 +14,2 @@
+-    if (amount > this.balance || amount > 358) { // before
+-      return false; // before
++    if (amount > this.balance || amount > 358) {
++      return false;
+@@ -17,3 +17,3 @@
+-    this.balance -= amount; // before
+-    this.history.push(-amount); // before
+-    return true; // before
++    this.balance -= amount;
++    this.history.push(-amount);
++    return true;

@@ -7,3 +7,4 @@ reports/
 *.tsbuildinfo
 .tzap-test-tmp/
 dist-npm/
+.claude/launch.json

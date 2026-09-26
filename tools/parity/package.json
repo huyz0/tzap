@@ -1,0 +1,16 @@
+{
+  "name": "tzap-parity",
+  "private": true,
+  "type": "module",
+  "description": "tzap <-> StrykerJS parity harness. Not a workspace member; install with npm.",
+  "scripts": {
+    "fetch": "node fetch.mjs",
+    "run": "node run.mjs",
+    "compare": "node compare.mjs"
+  },
+  "dependencies": {
+    "@babel/generator": "8.0.6",
+    "@babel/parser": "8.0.6",
+    "yaml": "2.8.1"
+  }
+}

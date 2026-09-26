@@ -1,0 +1,173 @@
+# tools/parity — tzap ↔ StrykerJS parity harness
+
+StrykerJS 10.0.0 is tzap's correctness oracle (docs/parity-and-benchmarks.md). This harness runs
+both tools over a pinned corpus, turns both mutation-testing-elements reports into one normalised
+record type, and compares inventory, verdicts and killing/covering tests against an explicit
+baseline of accepted differences. It implements milestone M4 (inventory) and the verdict and
+killing-test comparison of M6 (docs/delivery-plan.md).
+
+It is a standalone npm package, **not** a pnpm workspace member (the workspace globs are
+`packages/*` and `fixtures/*`), so nothing here affects `pnpm install` at the root. StrykerJS and
+Vitest are installed into each corpus copy, never into the workspace.
+
+## Layout
+
+| file | purpose |
+|---|---|
+| `corpus.lock` | the corpus: Tier A fixtures (paths in this repo) and Tier B libraries (git URL + exact commit), per-project overlays, versions of Stryker / Vitest / Node, harness workarounds |
+| `locks/<name>.package-lock.json` | npm lockfile each corpus copy resolved to; reused with `npm ci` so transitive deps are pinned too |
+| `fetch.mjs` | materialises `corpus/<name>` from the lock (copy or clone at the commit, overlay package.json, install) |
+| `run.mjs` | runs StrykerJS and tzap on one project, twice each, at the pinned configuration |
+| `normalise.mjs` | one elements-report reader for both tools → normalised records |
+| `compare.mjs` | inventory diff, agreement matrix, killedBy/coveredBy, flaky bucket, markdown report, baseline gate |
+| `mutator-mapping.yaml` | tzap mutator → Stryker mutator, with known intentional differences |
+| `parity-baseline.yaml` | accepted B/C/D differences with justification |
+| `workarounds/` | harness-side workarounds for open class-A tzap bugs (switch off in `corpus.lock`) |
+| `reports/<name>.md`, `reports/<name>.reference.md` | report per project and tzap engine (generated; committed) |
+| `reports/TRIAGE.md` | hand-written triage of the current differences, with the evidence for every class |
+| `fixtures/micro-vitest/` | the harness's own Tier A fixture: one file per disagreement category, with hand-written expectations in `parity-expectations.yaml` |
+| `corpus/`, `results/` | gitignored: checked-out projects and raw run outputs |
+
+## Running it
+
+Prerequisites: Node 26.7, git, npm, and a built tzap (`pnpm build` at the repo root).
+
+```sh
+cd tools/parity
+npm ci                                  # yaml + @babel/parser/generator for the normaliser
+node fetch.mjs --check                  # materialise every corpus project; run each suite once
+node run.mjs sample-vitest              # both tools, twice each (≈ minutes per Tier B project)
+node compare.mjs                        # every project that has results; exit 1 if the gate fails
+```
+
+`run.mjs <name|dir> [--runs N] [--engine warm|reference] [--only stryker|tzap] [--concurrency N] [--timeout-ms N]`
+
+- Stryker config (written to `results/<name>/stryker-<i>/stryker.config.json` for the record):
+  `testRunner: vitest`, `coverageAnalysis: perTest`, `ignoreStatic: false`, no `testFiles`,
+  `checkers: []`, `reporters: [json]`, `incremental: false`, `concurrency` = half the physical
+  cores, `timeoutMS` 20000 (per project `timeoutMS` in the lock), `mutate` = the lock's
+  `mutate` plus `!exclude` globs.
+- tzap: `tzap run -m results/<name>/tzap-model.json -r json,elements --no-arid --engine <e>
+  --workers <same concurrency>`. The model is `tzap model`'s discovery with `sources`/`exclude`
+  replaced by the lock's globs, so both tools mutate exactly the same files, and
+  `runner.config` set to the same Vitest config Stryker uses.
+- Runs alternate order (Stryker then tzap, then tzap then Stryker). Wall clock per run is in
+  `results/<name>/runs.json`; the report shows the median.
+- `--engine reference` stores under `tzap-reference-<i>`; compare with
+  `node compare.mjs <name> --engine reference`.
+
+`compare.mjs [name ...] [--engine warm|reference] [--baseline FILE] [--no-gate]`
+
+## What is compared
+
+Key (Stryker's incremental key): `<package-relative file>|<mutatorName>|<l:c>-<l:c>|<replacement>`.
+
+- **Locations**: both tools write 1-based lines and 1-based, end-exclusive columns in the
+  elements report. `normalise.mjs` verifies this on every read by slicing each file's `source`
+  and checking every bracketed mutant (BlockStatement, ObjectLiteral, `[...]`) starts and ends
+  on its brackets; the result is printed in each report. No location conversion is applied.
+- **Replacement**: reprinted with `@babel/generator` 8.0.6 (what Stryker 10 prints with; comments
+  dropped, since Stryker prints the leading comments attached to a node), then
+  whitespace removed and `' " \`` mapped to `"`. The reprint matters: tzap copies source text
+  (`price - (price * percent) / 100` → `price + (price * percent) / 100`) while Stryker prints the
+  AST (`price + price * percent / 100`); without it every such mutant is a false
+  tzap-only/stryker-only pair. Non-expression replacements (`;`) are compared as written.
+- **Tests**: `<test file>::<full name>`, with tzap's ` > ` suite separator normalised to
+  Stryker's space.
+- **Inventory**: `tzap-only` / `stryker-only` / `shared`, grouped by mutator and by an
+  automatically inferred cause (same site with different replacement; same replacement with a
+  different span; no counterpart; ...).
+- **Verdicts**: agreement matrix (rows Stryker, columns tzap) over the eight elements statuses,
+  for shared mutants that are not flaky.
+- **Flaky bucket**: a mutant whose status differs between a tool's two runs (or that appears in
+  only one of them) is quarantined: listed, excluded from the verdict comparison, not gated.
+- **Killing tests**: for mutants both tools killed, each tool's `killedBy` must be within the
+  other's `coveredBy` (a different *first* killer is normal: both stop at the first failure and
+  order tests differently, so that is only counted). `coveredBy` sets are compared for
+  non-static shared mutants.
+
+Difference kinds gated: `tzap-only`, `stryker-only`, `verdict`, `coveredBy`, `killedBy`.
+
+**Hand-written expectations.** A corpus project may carry `parity-expectations.yaml`
+(`expectations: [{key, status | [statuses] | absent, note}]`). Both tools are checked against
+it and the report shows each hit or miss; a tzap miss fails the gate (a hand-written
+expectation outranks Stryker), a Stryker miss is the evidence behind a class-B entry.
+
+## Triage and the baseline
+
+Every difference is exactly one of (docs/parity-and-benchmarks.md §4):
+
+- **A — tzap bug.** Never accepted. Recorded in `reports/TRIAGE.md` with a minimal
+  reproduction (ideally a `fixtures/micro-vitest` file with an expectation) and listed under
+  `open_tzap_bugs:` in the baseline, which classifies its differences in the reports but still
+  **fails the gate** until it is fixed (and fails it again, as stale, once fixed, so the entry is
+  removed). A bug that stops a tool from running at all may get a harness workaround in
+  `workarounds/` (enabled in `corpus.lock` `workarounds:`); it must be inert for Stryker and is
+  removed with the fix.
+- **B — Stryker limitation.** Cite the issue or mechanism; a Tier A fixture with a hand-written
+  expectation proves tzap right.
+- **C — intentional semantic difference.** Justify it in writing.
+- **D — nondeterminism in the project under test.**
+
+`parity-baseline.yaml` lists accepted B/C/D differences:
+
+```yaml
+accepted:
+  - id: C1-arrow-body            # stable, human-readable
+    kind: tzap-only              # tzap-only | stryker-only | verdict | coveredBy | killedBy
+    project: '*'                 # glob over corpus project names
+    key: '*|ArrowFunction|*'     # glob over the key; * also matches / and |
+    stryker: Killed              # optional status filters (verdict entries)
+    tzap: Survived
+    classification: C
+    note: >
+      Why this is not a tzap bug, with evidence.
+```
+
+`project` is a glob or a list of globs. Key globs are fnmatch-style (`*`, `?`, `[...]`; `[]` is
+literal).
+
+The gate (`compare.mjs`, exit 1) fails on **any difference no entry matches**, on **any open
+class-A difference or tzap miss of a hand-written expectation**, and on **any entry that no
+longer matches anything**. Staleness is judged for an entry only when every corpus project it
+covers was compared in that invocation, so run `node compare.mjs` (all projects) before
+accepting a change; a single-project run lists the entries it could not judge.
+
+### Accepting a baseline change
+
+1. Run `node compare.mjs <project>` and read `reports/<project>.md`: every `UNCLASSIFIED` row
+   and every stale entry printed on the console needs a decision.
+2. Reproduce the difference in isolation (smallest source + test that shows it; a Tier A fixture
+   is the ideal home). Decide A/B/C/D from the evidence, not from which tool is more convenient.
+3. A → fix tzap; do not touch the baseline. B/C/D → add or widen an entry with a note that says
+   what each tool does, why, and where the proof is. Keep keys as narrow as the category: a
+   glob that could swallow an unrelated future regression defeats the gate.
+4. Stale entry → find out what changed (a tzap fix is good news: delete the entry; a corpus or
+   Stryker change: re-triage).
+5. Re-run `compare.mjs` until it prints PASS, and commit the baseline and the regenerated
+   reports together, with the reasoning in the commit message.
+
+## Adding a corpus project
+
+1. Pick a permissively licensed Vitest project with a fast suite (< 60 s). Record the exact
+   commit (`gh api repos/<o>/<r>/commits/HEAD --jq .sha`) and its SPDX licence.
+2. Add an entry to `corpus.lock`: `name`, `tier: B`, `git`, `commit`, `licence`, optional
+   `subdir` (monorepo package), `keepDevDependencies` (only what the tests need; everything
+   else is dropped to keep installs small and scripts inert), `mutate`/`exclude` globs. For a
+   large project restrict **both** tools to a subset: `mutate` narrows Stryker and the tzap model
+   alike, and a `files:` parity Vitest config (`vitestConfig:`) restricts both to the subset's
+   tests. Port the suite to the pinned Vitest if needed with `patches:` (find/replace) and
+   `updateSnapshots: true` — document every patch in a comment.
+3. `node fetch.mjs <name> --check` must show a green suite. Commit the generated
+   `locks/<name>.package-lock.json`.
+4. `node run.mjs <name>`, `node compare.mjs <name>`, triage every difference as above, and
+   commit `reports/<name>.md` with the baseline entries.
+
+## Known limits
+
+- Vitest is pinned to 4.1.x for both tools: Stryker's Vitest runner joins test names with
+  spaces, which Vitest 5 no longer matches (stryker-js #6210).
+- Wall clock is advisory: the machine is not quiet (see docs/parity-and-benchmarks.md §5 for
+  the controls a published number needs). Runs alternate order to spread the ordering effect.
+- The CompileError comparison (Stryker's TypeScript checker vs `tzap --typecheck=all`) is not
+  wired yet; this harness runs `checkers: []`.

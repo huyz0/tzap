@@ -1,0 +1,14 @@
+{
+  "$schema": "../node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "testRunner": "vitest",
+  "plugins": ["@stryker-mutator/vitest-runner"],
+  "coverageAnalysis": "perTest",
+  "mutate": ["src/**/*.ts"],
+  "ignoreStatic": false,
+  "timeoutMS": 5000,
+  "timeoutFactor": 1.5,
+  "reporters": ["json"],
+  "jsonReporter": { "fileName": "reports/stryker.json" },
+  "incrementalFile": "reports/stryker-incremental.json",
+  "cleanTempDir": "always"
+}

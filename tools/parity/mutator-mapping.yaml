@@ -1,0 +1,107 @@
+# tzap mutator <-> StrykerJS 10.0.0 mutator equivalence.
+#
+# Required by docs/parity-and-benchmarks.md §3. Each tzap mutator maps to Stryker mutator(s)
+# with a relation: equivalent | broader | narrower | no-equivalent. tzap reuses Stryker's
+# names for the shared set, so the mapping is identity; the `notes` record known, intentional
+# differences in what a mutator produces (they surface as inventory differences and are
+# baselined as class C in parity-baseline.yaml, never silently normalised away here).
+#
+# A no-equivalent mutator's mutants are excluded from verdict comparison and reported as
+# inventory-only. Stryker mutators missing from this file are reported as "unmapped".
+
+mappings:
+  - tzap: ArithmeticOperator
+    stryker: [ArithmeticOperator]
+    relation: equivalent
+
+  - tzap: ArrayDeclaration
+    stryker: [ArrayDeclaration]
+    relation: equivalent
+
+  - tzap: ArrowFunction
+    stryker: [ArrowFunction]
+    relation: equivalent
+    notes: >
+      Intentional difference in what runs, not in what is reported: both tools report the
+      arrow's full span with replacement `() => undefined` (so keys match), but Stryker swaps
+      the whole arrow, dropping parameters and `async`, while tzap keeps the arrow, its
+      parameters and `async` and replaces only the concise body with `undefined` (placement
+      `arrow-body`): an `async` arrow still returns a Promise and `fn.length` is unchanged.
+      Consequence seen in the corpus: Stryker counts the mutant covered when the arrow is
+      created, tzap only when its body runs, so Stryker's coveredBy is a superset
+      (parity-baseline.yaml C3). No verdict difference observed so far.
+
+  - tzap: AssignmentOperator
+    stryker: [AssignmentOperator]
+    relation: equivalent
+
+  - tzap: BlockStatement
+    stryker: [BlockStatement]
+    relation: equivalent
+
+  - tzap: BooleanLiteral
+    stryker: [BooleanLiteral]
+    relation: equivalent
+
+  - tzap: CallExpression
+    stryker: [CallExpression]
+    relation: equivalent
+    notes: Stryker 10's filter (drop the call when any other mutant is in its subtree) is replicated.
+
+  - tzap: ConditionalExpression
+    stryker: [ConditionalExpression]
+    relation: equivalent
+    notes: >
+      Intentional difference: a `switch` case whose consequent declares a lexical binding
+      (`let`/`const`/`class`/function in the case body) is not emptied by tzap, because
+      skipping it would put a later case's reference to that binding into the TDZ or leave it
+      undeclared, a mutant that tests nothing about the case. Stryker empties every non-empty
+      case. Such Stryker mutants would be stryker-only (class C); not yet observed in the corpus
+      (no switch case in the Tier A/B mutate sets declares a lexical binding).
+
+  - tzap: EqualityOperator
+    stryker: [EqualityOperator]
+    relation: equivalent
+
+  - tzap: LogicalOperator
+    stryker: [LogicalOperator]
+    relation: equivalent
+    notes: >
+      Printing difference: tzap parenthesises a bare `??` operand when the outer `??` becomes
+      `&&` (`a ?? b ?? c` -> `(a ?? b) && c`), since `??` cannot mix with `&&` unparenthesised.
+      normalise.mjs reprints every replacement with @babel/generator, so this compares equal to
+      Stryker's AST-printed replacement. NOT intentional: for a left-nested `||` chain the
+      token swap changes precedence (`a || b || c` -> `a || b && c` = `a || (b && c)`, where
+      Stryker produces `(a || b) && c`): open class-A bug A2 in parity-baseline.yaml.
+
+  - tzap: MethodExpression
+    stryker: [MethodExpression]
+    relation: equivalent
+
+  - tzap: ObjectLiteral
+    stryker: [ObjectLiteral]
+    relation: equivalent
+
+  - tzap: OptionalChaining
+    stryker: [OptionalChaining]
+    relation: equivalent
+
+  - tzap: Regex
+    stryker: [Regex]
+    relation: equivalent
+    notes: Both use weapon-regex level 1.
+
+  - tzap: StringLiteral
+    stryker: [StringLiteral]
+    relation: equivalent
+
+  - tzap: UnaryOperator
+    stryker: [UnaryOperator]
+    relation: equivalent
+
+  - tzap: UpdateOperator
+    stryker: [UpdateOperator]
+    relation: equivalent
+
+# Stryker mutators with no tzap counterpart (none today).
+unmapped_stryker: []

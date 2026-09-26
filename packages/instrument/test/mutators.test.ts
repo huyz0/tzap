@@ -375,3 +375,25 @@ describe('LogicalOperator keeps the grouping of a chain', () => {
     ]);
   });
 });
+
+describe('LogicalOperator on a chain of parenthesised operands', () => {
+  it('keeps every parenthesis', () => {
+    expect(inventory('x = (a && b) || (c && d) || (e && f);', ['LogicalOperator'])).toEqual([
+      'LogicalOperator 1:5 (a && b) || (c && d) || (e && f) -> ((a && b) || (c && d)) && (e && f)',
+      'LogicalOperator 1:5 (a && b) || (c && d) -> (a && b) && (c && d)',
+      'LogicalOperator 1:6 a && b -> a || b',
+      'LogicalOperator 1:18 c && d -> c || d',
+      'LogicalOperator 1:30 e && f -> e || f',
+    ]);
+  });
+});
+
+describe('the safety net', () => {
+  it('never emits code that does not parse', async () => {
+    const { parse } = await import('../src/index.js');
+    const src = 'const a = (x && y) || (z && w) || (q && r);\nexport const f = (n: number) => (n > 1 ? n - 1 : n + 1);\n';
+    const out = instrument({ file: 'a.ts', source: src, firstMutant: 0, firstSite: 0 });
+    expect(parse('a.ts', out.code!).errors).toEqual([]);
+    expect(out.mutants.filter((m) => m.ignoredBy === 'placement')).toEqual([]);
+  });
+});

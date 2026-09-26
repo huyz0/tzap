@@ -400,6 +400,10 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
     return { code: undefined, map: undefined, mutants: descriptors, nextMutant, nextSite, errors };
   }
 
+  // Emission, as a function: run once, and again without any mutant that broke the output.
+  const siteStart = nextSite;
+  const render = (placed: Candidate[]) => {
+  nextSite = siteStart;
   // Group by placement target.
   interface Group {
     kind: Placement;
@@ -506,7 +510,7 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
   for (const e of edits) e.apply();
 
   const maxSite = nextSite - 1;
-  const program = parsed.program;
+  const program = parsed.program!;
   const statements = program.body as Node[];
   const lastDirective = statements.filter((x) => x.type === 'ExpressionStatement' && typeof x.directive === 'string').pop();
   const firstStatement = statements.find((x) => !(x.type === 'ExpressionStatement' && typeof x.directive === 'string'));
@@ -522,7 +526,33 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
 
   const code = s.toString();
   const map = s.generateMap({ hires: 'boundary', source: file, includeContent: true });
-  return { code, map, mutants: descriptors, nextMutant, nextSite, errors };
+  return { code, map };
+  };
+
+  // Safety net: the output must parse. A mutant whose text cannot sit where it is placed would
+  // otherwise break the whole file, and every mutant in it would read as uncovered. Find the ones
+  // that do, report them Ignored with the reason, and emit the rest.
+  const parses = (code: string) => parse(sfc ? `${file}.${sfc.lang}` : file, sfc ? sfcScripts(code).blanked : code).errors.length === 0;
+  let out = render(placed);
+  if (!parses(out.code)) {
+    const bad = new Set(placed.filter((c) => !parses(render([c]).code)));
+    for (const c of bad) {
+      c.ignoredBy = 'placement';
+      const d = byCandidate.get(c)!;
+      d.ignoredBy = 'placement';
+      d.num = -1;
+      d.site = -1;
+      d.description = 'tzap could not compile this mutant in place (a tzap bug: please report it)';
+    }
+    const good = placed.filter((c) => !bad.has(c));
+    if (good.length === 0) return { code: undefined, map: undefined, mutants: descriptors, nextMutant, nextSite: siteStart, errors };
+    out = render(good);
+    if (!parses(out.code)) {
+      errors.push('tzap produced instrumented code that does not parse; the file is not mutated (a tzap bug: please report it)');
+      return { code: undefined, map: undefined, mutants: [], nextMutant, nextSite: siteStart, errors };
+    }
+  }
+  return { code: out.code, map: out.map, mutants: descriptors, nextMutant, nextSite, errors };
 }
 
 /** Mutators in the order one-per-line prefers them: those that most often reveal a missing assertion first. */

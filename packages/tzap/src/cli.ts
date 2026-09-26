@@ -54,6 +54,7 @@ const RUN_OPTIONS = {
   dedup: { type: 'boolean' },
   extreme: { type: 'boolean' },
   'no-verify-survivors': { type: 'boolean' },
+  'verify-survivors': { type: 'string' },
   typecheck: { type: 'string' },
   tsconfig: { type: 'string' },
   'dry-run': { type: 'boolean' },
@@ -95,8 +96,10 @@ Run options:
                                 project has TypeScript and a tsconfig) or every mutant before it
                                 runs (all); rejected ones are CompileError, outside the score
       --tsconfig FILE           the tsconfig to type-check against (default: the nearest one)
-      --no-verify-survivors     report warm survivors without confirming them in isolation
-                                (faster; state a test leaves behind can then hide a kill)
+      --verify-survivors auto|all|off
+                                confirm warm survivors in isolation: those whose tests reach
+                                module state (auto, the default), all of them, or none
+                                (off, the fastest: state a test leaves behind can hide a kill)
       --dry-run                 print what would be analysed, and stop
   -q, --quiet                   no progress output
 
@@ -225,6 +228,8 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
   }
 
   const cacheDir = (values['cache-dir'] as string | undefined) ?? model.cache?.dir;
+  const verifyMode = values['no-verify-survivors'] ? 'off' : ((values['verify-survivors'] as string | undefined) ?? 'auto');
+  if (!['auto', 'all', 'off'].includes(verifyMode)) throw new UsageError(`--verify-survivors: expected auto, all or off, got "${verifyMode}"`);
   const filters = values['no-arid'] ? [] : aridFilters();
 
   // Type checking: explicit modes must work; the default quietly steps aside for a project with
@@ -259,7 +264,7 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
     mutators,
     filters,
     reduce: { onePerLine: values['one-per-line'] === true, equivalence: values.dedup === true },
-    verifySurvivors: values['no-verify-survivors'] !== true,
+    verifySurvivors: verifyMode === 'all' ? true : verifyMode === 'off' ? false : 'auto',
     ...(checker && tcMode ? { typecheck: { mode: tcMode, check: (m, root) => checker!.check(m, root) } } : {}),
     lines: changed?.files,
     runners: { vitest: createVitestSession, jest: createJestSession, node: createNodeTestSession, mocha: createMochaSession },

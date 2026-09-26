@@ -32,7 +32,7 @@ export interface EngineOptions {
    * need no second look — a test failed with the mutant active — but a survivor is what people
    * act on. Off trades that guarantee for speed.
    */
-  verifySurvivors?: boolean;
+  verifySurvivors?: boolean | 'auto';
   /** Opt-in reductions: see InstrumentInput.reduce. */
   reduce?: { onePerLine?: boolean; equivalence?: boolean };
   /** Changed lines per root-relative file. Undefined: everything is in scope. Files absent from the map are out of scope. */
@@ -80,6 +80,11 @@ export interface MutantCoverage {
   tests: string[];
   /** Import-closure hash per global test key. */
   closures: ReadonlyMap<string, string>;
+  /**
+   * Static mutants: every test an isolated run would run against it (all green tests of every
+   * file that reached it). Its verdict holds while exactly these run and none of them changed.
+   */
+  ran?: string[];
 }
 
 interface TestRecord extends TestInfo {
@@ -90,6 +95,11 @@ interface TestRecord extends TestInfo {
   hits: Map<number, number>;
   loops: number;
   red?: string;
+  /**
+   * Something the test can reach may keep mutable state between runs, so a warm survival could be
+   * a masked kill and is confirmed in isolation (`verifySurvivors: auto`).
+   */
+  stateful?: boolean;
   /** Behaves differently when repeated warm: warm tries it decides cannot be trusted. */
   stateSensitive?: string;
 }
@@ -353,6 +363,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       return (everything = `all:${h.digest('hex').slice(0, 16)}`);
     };
     const closureByFile = new Map<string, string>();
+    const statefulByFile = new Map<string, boolean>();
     for (const t of green) {
       let c = closureByFile.get(t.file);
       if (c === undefined) {
@@ -361,6 +372,14 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         closureByFile.set(t.file, c);
       }
       t.closure = c;
+      let st = statefulByFile.get(t.file);
+      if (st === undefined) {
+        const cl = graph.closure(path.resolve(root, t.file));
+        // Project files only: state inside third-party packages is outside what this checks.
+        st = cl.dynamic || cl.files.some((f) => !/[\\/]node_modules[\\/]/.test(f) && graph.node(f).stateful);
+        statefulByFile.set(t.file, st);
+      }
+      t.stateful = st;
     }
     const closures = new Map(green.map((t) => [t.key, t.closure!]));
 
@@ -394,6 +413,14 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       }
     }
 
+    /** The keys of the green tests an isolated run of a static mutant runs: its files' tests. */
+    const staticRan = (d: MutantDescriptor): string[] => {
+      const files = new Set<string>();
+      for (const key of staticSites.get(d.site) ?? []) files.add(normPath(key.split('\0')[1]!));
+      for (const t of siteTests.get(d.site) ?? []) files.add(normPath(path.resolve(root, t.file)));
+      return green.filter((t) => files.has(normPath(path.resolve(root, t.file)))).map((t) => t.key).sort();
+    };
+
     // --- classify ----------------------------------------------------------------------------
     const covered: Pending[] = [];
     const statics: MutantDescriptor[] = [];
@@ -401,7 +428,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       if (results.has(d.num)) continue;
       const isStatic = staticSites.has(d.site);
       const reaching = (siteTests.get(d.site) ?? []).map((t) => t.key);
-      const reused = options.reuse?.(d, { static: isStatic, tests: reaching, closures });
+      const reused = options.reuse?.(d, { static: isStatic, tests: reaching, closures, ...(isStatic ? { ran: staticRan(d) } : {}) });
       if (reused) {
         results.set(d.num, { ...reused, ...d, status: reused.status, cached: true });
         continue;
@@ -547,7 +574,8 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       const survive = (p: Pending) => {
         // Survived every test the warm engine could trust. Confirmed in isolation unless told not
         // to; covered by state-sensitive tests too, it always is.
-        if (p.warm.length < p.tests.length || options.verifySurvivors !== false) {
+        const verify = options.verifySurvivors === true || (options.verifySurvivors !== false && p.tests.some((k) => tests.get(k)?.stateful !== false));
+        if (p.warm.length < p.tests.length || verify) {
           verifying++;
           toFallback(p);
         }
@@ -670,7 +698,10 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       let remaining = plan;
       for (let attempt = 0; attempt < 50; attempt++) {
         let s = warm.get(pkgId)!;
-        const res = await s.run({ id: runId++, mode: 'mutate', plan: remaining, budgetMs });
+        // Only the files that hold a planned test: every other file would be loaded and collected
+        // for nothing, a fixed cost per round that dwarfs the tries on a small diff.
+        const files = [...new Set(Object.keys(remaining).map((id) => path.resolve(root, tests.get(`${pkgId}::${id}`)!.file)))];
+        const res = await s.run({ id: runId++, mode: 'mutate', plan: remaining, files, budgetMs });
         if (!res.timedOut) {
           merged.tests.push(...res.tests);
           merged.files.push(...res.files);
@@ -746,6 +777,8 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
           }
           const coveredBy = new Set<string>(keys);
           for (const t of siteTests.get(d.site) ?? []) coveredBy.add(t.key);
+          // A static mutant is judged by every test of the files that load it.
+          if (isStatic) for (const k of staticRan(d)) coveredBy.add(k);
           return { d, isStatic, files, coveredBy, timeout: false, tested: 0, planned: 0 };
         });
 
@@ -781,7 +814,11 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       }
 
       const cores = os.availableParallelism();
-      const lanes = fresh ? Math.max(1, options.concurrency ?? 1) : Math.max(1, options.concurrency ?? Math.min(4, Math.floor(cores / 4)));
+      // Another session costs a runner boot; it pays only when there is enough isolated work to
+      // spread over it. The first lane reuses the warm session when that already isolates files.
+      const lanes = fresh
+        ? Math.max(1, options.concurrency ?? 1)
+        : Math.max(1, options.concurrency ?? Math.min(4, Math.floor(cores / 4), Math.ceil(jobs.length / 6)));
       const workersPerSession = Math.max(1, Math.floor(cores / lanes));
 
       const runJob = async (job: Job, session: () => Promise<RunnerSession>, retire: () => void): Promise<void> => {
@@ -879,14 +916,14 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
 
       const pkgById = new Map(runnerPackages.map((p) => [p.id, p]));
       const queue = jobs.slice();
-      const lane = async () => {
+      const lane = async (laneIndex: number) => {
         const sessions = new Map<string, RunnerSession>();
         try {
           for (;;) {
             const job = queue.shift();
             if (!job) return;
             const pkg = pkgById.get(job.pkgId)!;
-            const reuseWarm = !fresh && isolatesFiles.has(job.pkgId) && lanes === 1;
+            const reuseWarm = !fresh && laneIndex === 0 && isolatesFiles.has(job.pkgId);
             const session = async () => {
               if (reuseWarm) {
                 let w = warm.get(job.pkgId);
@@ -919,7 +956,10 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
           await Promise.all([...sessions.values()].map((s) => s.close()));
         }
       };
-      await Promise.all(Array.from({ length: lanes }, lane));
+      const isoStart = performance.now();
+      await Promise.all(Array.from({ length: lanes }, (_, i) => lane(i)));
+      if (process.env.TZAP_DEBUG) process.stderr.write(`tzap debug: isolated ${items.length} mutants in ${jobs.length} runs on ${lanes} lanes, ${Math.round(performance.now() - isoStart)} ms; files per run ${jobs.map((j) => j.assign.size).join(",")}
+`);
 
       for (const it of items) {
         const base: MutantResult = { ...it.d, status: 'Survived', coveredBy: [...it.coveredBy].sort(), testsCompleted: it.tested, ...(it.isStatic ? { static: true } : {}) };

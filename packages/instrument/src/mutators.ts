@@ -322,11 +322,12 @@ export const logicalOperator: Mutator = {
       (next === '&&' ? n.operator === '||' || n.operator === '??' : n.operator === '??');
     const bare = regroups;
     if (bare(left) || bare(right)) {
-      const at = r.length - (node.end - right.start);
+      // The swapped operator has the same length as the original, so offsets into `r` are
+      // offsets into the source; splice by them, keeping any parenthesis that closes the node.
+      const o = (x: number) => x - node.start;
       const l = bare(left) ? `(${ctx.source.slice(left.start, left.end)})` : ctx.source.slice(left.start, left.end);
-      const mid = r.slice(left.end - node.start, at);
       const rt = bare(right) ? `(${ctx.source.slice(right.start, right.end)})` : ctx.source.slice(right.start, right.end);
-      return [expr(ctx.source.slice(node.start, left.start) + l + mid + rt)];
+      return [expr(r.slice(0, o(left.start)) + l + r.slice(o(left.end), o(right.start)) + rt + r.slice(o(right.end)))];
     }
     return [expr(r)];
   },
