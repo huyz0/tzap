@@ -28,14 +28,17 @@ function setUp(fixture, extra) {
 }
 const expected = 'tzap: 6 survived, 3 uncovered of 37 mutants (score 75.7%, strength 82.4%)';
 try {
+  // SMOKE_ONLY=sample-node checks one fixture.
+  const only = process.env.SMOKE_ONLY?.split(',');
   for (const [fixture, extra] of [['sample-vitest', ['vitest@5.0.2']], ['sample-node', []], ['sample-mocha', ['mocha@12.0.2']]]) {
+    if (only && !only.includes(fixture)) continue;
     const dir = setUp(fixture, extra);
     const out = run('npx', ['tzap', 'run', '-q', '-r', 'agent'], dir);
     const first = out.split('\n')[0];
     if (first !== expected) throw new Error(`unexpected result from the installed package on ${fixture}:\n${out}`);
     console.log(`${fixture}: ${first}`);
   }
-  console.log(`installed tzap ${run('npx', ['tzap', '--version'], projects[0]).trim()} from ${path.basename(tarball)}`);
+  if (projects.length) console.log(`installed tzap ${run('npx', ['tzap', '--version'], projects[0]).trim()} from ${path.basename(tarball)}`);
 } finally {
   for (const dir of projects) rmSync(dir, { recursive: true, force: true });
   rmSync(packDir, { recursive: true, force: true });

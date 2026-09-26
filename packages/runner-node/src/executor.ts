@@ -40,7 +40,9 @@ const require = createRequire(import.meta.url);
  */
 function realPath(p: string): string {
   try {
-    return realpathSync.native(p);
+    // The JavaScript implementation, as Node's module resolver uses: it resolves symlinks but,
+    // unlike the native one, keeps Windows 8.3 short names (C:\Users\RUNNER~1) as they are.
+    return realpathSync(p);
   } catch {
     return p;
   }
@@ -714,7 +716,7 @@ export class Executor {
   private staticHitsFor(file: string, outside: Map<number, number>): Array<[number, number]> {
     if (outside.size === 0) return [];
     const seen = new Set<string>();
-    const stack = [norm(realPath(file))];
+    const stack = [norm(realPath(file)), norm(file)];
     while (stack.length) {
       const m = stack.pop()!;
       if (seen.has(m)) continue;

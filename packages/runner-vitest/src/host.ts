@@ -5,7 +5,7 @@
  * that reliably stops synchronous JavaScript.
  */
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { FileOutcome, HostRequest, HostResponse, RunRequest, RunResult, SessionOptions, TestOutcome } from '@tzap/protocol';
@@ -79,7 +79,20 @@ async function init(o: SessionOptions): Promise<void> {
 
   const instrumented = JSON.parse(readFileSync(o.instrumented, 'utf8')) as Instrumented;
   const byId = new Map<string, { code: string; map: unknown }>();
-  for (const [file, value] of Object.entries(instrumented)) byId.set(norm(file), value);
+  // Vite may name a module by its real path: symlinks resolved, and on Windows 8.3 short names
+  // (C:\PROGRA~1) expanded. The file answers to each form of its name.
+  const forms = (file: string) => {
+    const out = new Set([file]);
+    for (const f of [realpathSync, realpathSync.native]) {
+      try {
+        out.add(f(file));
+      } catch {
+        // A file that is gone keeps the name it was given.
+      }
+    }
+    return out;
+  };
+  for (const [file, value] of Object.entries(instrumented)) for (const f of forms(file)) byId.set(norm(f), value);
 
   // The setup shim lives inside the package's node_modules so that its `import 'vitest'`
   // resolves exactly as the user's test files do, to the same Vitest instance.
