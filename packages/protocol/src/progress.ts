@@ -12,12 +12,26 @@ export function progressWriter(dir: string | undefined, id: string): ((runId: nu
   } catch {
     return undefined;
   }
+  // Each entry overwrites the last in place, padded with spaces to the longest entry so far: the
+  // file is never truncated, so a reader polling it sees one whole entry, never a mix of two.
+  let width = 200;
+  let open = true;
   return (runId, test, mutant, done) => {
-    const line = `${runId}\t${mutant}\t${done ? 1 : 0}\t${test}\n`.padEnd(200, ' ');
+    if (!open) return;
+    const bytes = Buffer.from(`${runId}\t${mutant}\t${done ? 1 : 0}\t${test}\n`);
+    width = Math.max(width, bytes.length);
+    const line = Buffer.alloc(width, ' ');
+    bytes.copy(line);
     try {
-      writeSync(fd, line, 0);
+      writeSync(fd, line, 0, width, 0);
     } catch {
-      closeSync(fd);
+      // Progress is advisory: a worker that cannot write it runs on without it.
+      open = false;
+      try {
+        closeSync(fd);
+      } catch {
+        // already unusable
+      }
     }
   };
 }

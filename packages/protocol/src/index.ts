@@ -154,9 +154,6 @@ export type HostResponse =
   | { type: 'progress'; runId: number; test: string; mutant: number }
   | { type: 'error'; message: string; during: 'init' | 'run' | 'background' };
 
-/** Name of the BroadcastChannel runner workers report progress on, so a hang can be attributed. */
-export const PROGRESS_CHANNEL = 'tzap-progress';
-
 // --- progress files -------------------------------------------------------------------------
 //
 // A runner worker that a mutant has hung synchronously cannot say so: its event loop is blocked.

@@ -260,7 +260,9 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
       if (!quiet) process.stderr.write(`tzap: type checking off: ${(e as Error).message}\n`);
     }
   }
-  const cache = cacheDir ? loadCache(path.resolve(cwd, cacheDir), model, { tzapVersion: VERSION, mutators, filters: filters.map((f) => f.name) }) : undefined;
+  const cache = cacheDir
+    ? loadCache(path.resolve(cwd, cacheDir), model, { tzapVersion: VERSION, mutators, filters: filters.map((f) => f.name), typecheck: checker && tcMode ? tcMode : 'off', verifySurvivors: verifyMode })
+    : undefined;
   if (cache?.note && !quiet) process.stderr.write(`tzap: ${cache.note}\n`);
 
   const result = await analyse(model, {

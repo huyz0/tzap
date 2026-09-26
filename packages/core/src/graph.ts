@@ -9,7 +9,7 @@
  * and is reported so callers can widen to everything.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { parseSync } from 'oxc-parser';
 
@@ -33,6 +33,18 @@ export interface FileNode {
 export interface GraphOptions {
   /** Workspace package name -> absolute directory, so `@acme/lib` reaches that package's files. */
   workspacePackages?: ReadonlyMap<string, string>;
+  /**
+   * The repository: a bare import whose `node_modules` entry links to a directory inside it (and
+   * outside any `node_modules`) is a workspace package too, as the package manager's link makes
+   * it. That covers workspace members the model does not list as packages of their own.
+   */
+  root?: string;
+  /**
+   * The source files under a workspace package's directory (given with symlinks resolved). A
+   * closure that enters the package walks them, and so whatever they import in turn, other
+   * workspace packages included.
+   */
+  filesUnder?: (dir: string) => readonly string[];
   /** tsconfig `paths` as absolute-target patterns, e.g. `@/*` -> [`/repo/src/*`]. */
   paths?: ReadonlyMap<string, string[]>;
 }
@@ -45,7 +57,7 @@ function isFile(p: string): boolean {
   }
 }
 
-export function resolveLocal(from: string, spec: string): string | undefined {
+function resolveLocal(from: string, spec: string): string | undefined {
   const base = path.resolve(path.dirname(from), spec);
   if (isFile(base)) return base;
   const ext = path.extname(base);
@@ -92,13 +104,7 @@ interface StmtNode {
   [k: string]: unknown;
 }
 
-/**
- * Whether a module may keep mutable state between calls — what a warm run of a test can leave
- * behind for the next run to find. Syntactic and deliberately broad: any top-level `let`/`var`,
- * a `const` holding an object, array, instance or call result, a class with static fields, or a
- * top-level statement run for its side effect. A module of functions, classes and constant
- * primitives cannot hold state; nearly anything else might.
- */
+/** Calls that register tests or hooks: a test file's top-level statements, not module state. */
 const TEST_APIS = new Set(['describe', 'it', 'test', 'suite', 'bench', 'beforeEach', 'afterEach', 'beforeAll', 'afterAll', 'before', 'after', 'context', 'specify', 'xit', 'xdescribe', 'fit', 'fdescribe']);
 
 /** `describe(...)`, `it.each(...)(...)`, `vi.mock(...)`: a test file registering tests or mocks. */
@@ -114,6 +120,22 @@ function isTestRegistration(e: StmtNode | undefined): boolean {
   return !!n && n.type === 'Identifier' && TEST_APIS.has(n.name as string);
 }
 
+/** A path with symlinks resolved, or as given when it does not exist. */
+export function realPath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+/**
+ * Whether a module may keep mutable state between calls — what a warm run of a test can leave
+ * behind for the next run to find. Syntactic and deliberately broad: any top-level `let`/`var`,
+ * a `const` holding an object, array, instance or call result, a class with static fields, or a
+ * top-level statement run for its side effect. A module of functions, classes and constant
+ * primitives cannot hold state; nearly anything else might.
+ */
 export function mayHoldState(program: { body: StmtNode[] }): boolean {
   const statelessInit = (init: StmtNode | null | undefined): boolean => {
     if (!init) return true;
@@ -182,7 +204,41 @@ export function mayHoldState(program: { body: StmtNode[] }): boolean {
 
 export class ImportGraph {
   private readonly nodes = new Map<string, FileNode>();
-  constructor(private readonly options: GraphOptions = {}) {}
+  /** Workspace package name -> its directory, as resolved so far. */
+  private readonly packageDirs = new Map<string, string>();
+  private readonly linked = new Map<string, string | undefined>();
+  private readonly root: string | undefined;
+  private readonly realRoot: string | undefined;
+  constructor(private readonly options: GraphOptions = {}) {
+    for (const [name, dir] of options.workspacePackages ?? []) this.packageDirs.set(name, realPath(path.resolve(dir)));
+    this.root = options.root ? path.resolve(options.root) : undefined;
+    this.realRoot = this.root ? realPath(this.root) : undefined;
+  }
+
+  /** The workspace directory a bare package name resolves to from `dir`, through node_modules links. */
+  private workspaceDir(name: string, from: string): string | undefined {
+    const known = this.packageDirs.get(name);
+    if (known !== undefined) return known;
+    const root = this.realRoot;
+    if (!root) return undefined;
+    for (let d = path.dirname(from); ; d = path.dirname(d)) {
+      const key = `${d}\0${name}`;
+      if (this.linked.has(key)) return this.linked.get(key);
+      const candidate = path.join(d, 'node_modules', name);
+      let found: string | undefined;
+      if (existsSync(candidate)) {
+        const real = realPath(candidate);
+        const inside = real === root || real.startsWith(root + path.sep);
+        found = inside && !real.split(path.sep).includes('node_modules') ? real : undefined;
+        this.linked.set(key, found);
+        return found;
+      }
+      if (d === path.dirname(d) || d === this.root || d === root) {
+        this.linked.set(key, undefined);
+        return undefined;
+      }
+    }
+  }
 
   node(file: string): FileNode {
     const key = path.resolve(file);
@@ -215,7 +271,11 @@ export class ImportGraph {
           continue;
         }
         const pkgName = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]!;
-        if (this.options.workspacePackages?.has(pkgName)) packages.push(pkgName);
+        const dir = this.workspaceDir(pkgName, key);
+        if (dir !== undefined) {
+          this.packageDirs.set(pkgName, dir);
+          packages.push(pkgName);
+        }
       }
     }
     n = { file: key, imports: [...new Set(imports)].sort(), packages: [...new Set(packages)].sort(), dynamic, stateful, hash };
@@ -240,7 +300,8 @@ export class ImportGraph {
 
   /**
    * Every local file reachable from `entry`, including itself, plus whether the reach is
-   * unknowable (a computed specifier somewhere) and which workspace packages it enters.
+   * unknowable (a computed specifier somewhere) and which workspace packages it enters. Entering
+   * a package reaches all of its source files, whatever the entry point imports of them.
    */
   closure(entry: string): { files: string[]; dynamic: boolean; packages: string[] } {
     const seen = new Set<string>();
@@ -254,19 +315,26 @@ export class ImportGraph {
       if (!existsSync(f)) continue;
       const n = this.node(f);
       dynamic ||= n.dynamic;
-      for (const p of n.packages) packages.add(p);
+      for (const p of n.packages) {
+        if (packages.has(p)) continue;
+        packages.add(p);
+        const dir = this.packageDirs.get(p);
+        if (dir !== undefined) for (const pf of this.options.filesUnder?.(dir) ?? []) stack.push(path.resolve(pf));
+      }
       for (const i of n.imports) if (!seen.has(i)) stack.push(i);
     }
     return { files: [...seen].sort(), dynamic, packages: [...packages].sort() };
   }
 
-  /** A hash of every file in the closure and its content: the cache key for "nothing this test can reach changed". */
-  closureHash(entry: string, extra: (pkg: string) => string[] = () => []): string {
+  /**
+   * A hash of every file in the closure and its content: the cache key for "nothing this test can
+   * reach changed". Paths enter it relative to the root, so a cache moves between checkouts.
+   */
+  closureHash(entry: string): string {
     const c = this.closure(entry);
     const h = createHash('sha256');
-    const files = new Set(c.files);
-    for (const p of c.packages) for (const f of extra(p)) files.add(path.resolve(f));
-    for (const f of [...files].sort()) h.update(f).update('\0').update(this.node(f).hash).update('\n');
+    const name = (f: string) => (this.root ? path.relative(this.root, f).split(path.sep).join('/') : f);
+    for (const f of c.files) h.update(name(f)).update('\0').update(this.node(f).hash).update('\n');
     if (c.dynamic) h.update('dynamic');
     return h.digest('hex').slice(0, 16);
   }

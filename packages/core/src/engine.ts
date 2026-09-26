@@ -16,7 +16,7 @@ import { instrument, type LineRange, type MutantFilter } from '@tzap/instrument'
 import { normPath, type RunnerFactory, type RunnerSession, type RunResult, type Try } from '@tzap/protocol';
 import { createHash } from 'node:crypto';
 import { relativeTo, sourceFiles, toPosix } from './files.js';
-import { ImportGraph } from './graph.js';
+import { ImportGraph, realPath } from './graph.js';
 
 export type EngineKind = 'warm' | 'reference';
 
@@ -26,11 +26,12 @@ export interface EngineOptions {
   mutators?: readonly string[];
   filters?: ReadonlyArray<{ name: string; filter: MutantFilter }>;
   /**
-   * Re-decide every warm survivor in isolation before reporting it (default true). A warm try can
-   * be masked by state an earlier run of the same test left behind: a mutant that removes a
-   * registration survives because the registration is still there from the run before. Kills
-   * need no second look — a test failed with the mutant active — but a survivor is what people
-   * act on. Off trades that guarantee for speed.
+   * Re-decide warm survivors in isolation before reporting them. A warm try can be masked by
+   * state an earlier run of the same test left behind: a mutant that removes a registration
+   * survives because the registration is still there from the run before. Kills need no second
+   * look — a test failed with the mutant active — but a survivor is what people act on.
+   * `'auto'` (the default) confirms the survivors whose tests can reach module state, `true`
+   * every survivor, `false` none (faster, and a masked kill can then pass as a survivor).
    */
   verifySurvivors?: boolean | 'auto';
   /** Opt-in reductions: see InstrumentInput.reduce. */
@@ -56,7 +57,7 @@ export interface EngineOptions {
    * Set when nothing that could change a verdict has changed since the cache was written: if
    * every mutant is found, no test runs at all.
    */
-  unchanged?: { lookup(m: MutantDescriptor): MutantResult | undefined; tests: TestInfo[] };
+  unchanged?: { lookup(m: MutantDescriptor): MutantResult | undefined; tests: TestInfo[]; red: AnalysisResult['redTests'] };
   onEvent?: (e: EngineEvent) => void;
   /**
    * Type-checks mutants: returns, per mutant number, the first diagnostic for each mutant the
@@ -65,6 +66,7 @@ export interface EngineOptions {
    */
   typecheck?: { mode: 'survivors' | 'all'; check: (mutants: readonly MutantDescriptor[], root: string) => Promise<Map<number, string>> };
   tzapVersion: string;
+  /** Scratch directory for instrumented sources and runner files. Default: a new one, removed at the end. */
   tmpDir?: string;
 }
 
@@ -145,17 +147,39 @@ function speedClass(ms: number | undefined): number {
   return ms === undefined || ms < 50 ? 0 : 1 + Math.floor(Math.log10(ms / 50));
 }
 
+/**
+ * How many times one round may be restarted after the wall-clock backstop: each restart drops the
+ * mutants that hung, so this bounds a round only when mutants keep hanging one after another.
+ */
+const MAX_BACKSTOP_RESTARTS = 50;
 const HIT_FACTOR = 100;
 const HIT_FLOOR = 1000;
 const LOOP_FACTOR = 10;
 const LOOP_FLOOR = 100_000;
 
 export async function analyse(model: ProjectModel, options: EngineOptions): Promise<AnalysisResult> {
+  // A scratch directory of the engine's own is removed however the analysis ends; one the caller
+  // gave is the caller's.
+  const own = options.tmpDir === undefined;
+  const tmpDir = options.tmpDir ?? path.join(os.tmpdir(), `tzap-${process.pid}-${Date.now()}`);
+  mkdirSync(tmpDir, { recursive: true });
+  try {
+    return await analyseIn(model, options, tmpDir);
+  } finally {
+    if (own) {
+      try {
+        rmSync(tmpDir, { recursive: true, force: true });
+      } catch {
+        // A leftover scratch directory is not worth failing an analysis over.
+      }
+    }
+  }
+}
+
+async function analyseIn(model: ProjectModel, options: EngineOptions, tmpDir: string): Promise<AnalysisResult> {
   const emit = options.onEvent ?? (() => {});
   const timer = new Timer();
   const root = path.resolve(model.root);
-  const tmpDir = options.tmpDir ?? path.join(os.tmpdir(), `tzap-${process.pid}-${Date.now()}`);
-  mkdirSync(tmpDir, { recursive: true });
 
   // --- inventory and instrumentation -------------------------------------------------------
   timer.start('instrument');
@@ -218,14 +242,9 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
     .filter((d) => d.num < 0)
     .map((d) => ({ ...d, status: d.ignoredBy?.startsWith('type:') ? ('CompileError' as const) : ('Ignored' as const), statusReason: d.description ?? d.ignoredBy }));
 
-  const finish = (tests: Array<TestInfo & { key?: string }>, red: TestRecord[]): AnalysisResult => {
+  const finish = (tests: Array<TestInfo & { key?: string }>, red: Array<Pick<TestRecord, 'key' | 'name' | 'file' | 'red'>>): AnalysisResult => {
     timer.stop();
     const mutants = [...ignored, ...results.values()].sort(compareMutants);
-    try {
-      rmSync(tmpDir, { recursive: true, force: true });
-    } catch {
-      // A leftover scratch directory is not worth failing an analysis over.
-    }
     return {
       tzapVersion: options.tzapVersion,
       root,
@@ -272,7 +291,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
     if (found.every((r) => r !== undefined)) {
       for (const r of found) results.set(r!.num, { ...r!, cached: true });
       emit({ type: 'progress', decided: results.size, total: placed.length });
-      return finish(options.unchanged.tests, []);
+      return finish(options.unchanged.tests, options.unchanged.red.map((t) => ({ key: t.id, name: t.name, file: t.file, red: t.message })));
     }
   }
   if (placed.length === 0 || runnerPackages.length === 0) {
@@ -297,17 +316,18 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
   const warm = new Map<string, RunnerSession>();
   const isolatesFiles = new Set<string>();
   const staticPerFile = new Set<string>();
+  const packageFiles = new Map(model.packages.map((p) => [p.id, sourceFiles(root, p)]));
+  const allSources = [...new Set([...packageFiles.values()].flat().map((f) => path.resolve(f)))].map((f) => ({ f, real: realPath(f) }));
   const graph = new ImportGraph({
     workspacePackages: new Map(model.packages.map((p) => [p.id, path.resolve(root, p.root)])),
+    root,
+    filesUnder: (dir) => allSources.filter((s) => s.real.startsWith(dir + path.sep)).map((s) => s.f),
   });
-  const packageFiles = new Map(model.packages.map((p) => [p.id, sourceFiles(root, p)]));
   // A diff run's coverage phase runs only the test files that can reach a file with mutants.
   const mutatedFiles = new Set(placed.map((d) => toPosix(path.resolve(root, d.file)).toLowerCase()));
   const reachesMutated = (testFile: string) => {
     const c = graph.closure(testFile);
-    if (c.dynamic) return true;
-    if (c.files.some((f) => mutatedFiles.has(toPosix(f).toLowerCase()))) return true;
-    return c.packages.some((pkg) => (packageFiles.get(pkg) ?? []).some((f) => mutatedFiles.has(toPosix(f).toLowerCase())));
+    return c.dynamic || c.files.some((f) => mutatedFiles.has(toPosix(f).toLowerCase()));
   };
   const tests = new Map<string, TestRecord>();
   const staticSites = new Map<number, Set<string>>(); // site -> test files (absolute) that reached it outside tests
@@ -398,7 +418,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       if (everything) return everything;
       const h = createHash('sha256');
       for (const t of [...tests.values()].map((x) => x.file).sort()) h.update(t).update(graph.node(path.resolve(root, t)).hash);
-      for (const [, fs] of [...packageFiles].sort(([a], [b]) => (a < b ? -1 : 1))) for (const f of fs) h.update(f).update(graph.node(f).hash);
+      for (const [, fs] of [...packageFiles].sort(([a], [b]) => (a < b ? -1 : 1))) for (const f of fs) h.update(relativeTo(root, f)).update(graph.node(f).hash);
       return (everything = `all:${h.digest('hex').slice(0, 16)}`);
     };
     const closureByFile = new Map<string, string>();
@@ -407,7 +427,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       let c = closureByFile.get(t.file);
       if (c === undefined) {
         const abs = path.resolve(root, t.file);
-        c = graph.closure(abs).dynamic ? everythingHash() : graph.closureHash(abs, (pkg) => packageFiles.get(pkg) ?? []);
+        c = graph.closure(abs).dynamic ? everythingHash() : graph.closureHash(abs);
         closureByFile.set(t.file, c);
       }
       t.closure = c;
@@ -500,7 +520,12 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       covered.push({ d, tests: ordered, warm: warmTests, cursor: 0, completed: 0 });
     }
     const total = placed.length;
-    const decidedCount = () => results.size;
+    /** Mutants with a verdict; one waiting for its isolated run is not decided yet. */
+    const decidedCount = () => {
+      let n = 0;
+      for (const r of results.values()) if (r.status !== 'Pending') n++;
+      return n;
+    };
     emit({ type: 'progress', decided: decidedCount(), total });
 
     const limitsFor = (t: TestRecord, site: number): Pick<Try, 'N' | 'L'> => ({
@@ -732,7 +757,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
     async function runWithRecovery(pkgId: string, plan: Record<string, Try[]>, budgetMs: number): Promise<RunResult> {
       const merged: RunResult = { id: 0, tests: [], files: [], durationMs: 0 };
       let remaining = plan;
-      for (let attempt = 0; attempt < 50; attempt++) {
+      for (let attempt = 0; attempt < MAX_BACKSTOP_RESTARTS; attempt++) {
         let s = warm.get(pkgId)!;
         // Only the files that hold a planned test: every other file would be loaded and collected
         // for nothing, a fixed cost per round that dwarfs the tries on a small diff.
@@ -747,11 +772,14 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
           }
           return merged;
         }
-        const hung = new Set((res.inFlight ?? []).map((x) => x.mutant).filter((m) => m >= 0));
+        const inFlight = (res.inFlight ?? []).filter((x) => x.mutant >= 0);
+        const hung = new Set(inFlight.map((x) => x.mutant));
         if (hung.size === 0) throw new Error(`a test run went silent for ${Math.round(budgetMs / 1000)} s with no mutant try in flight: a hook outside any test (beforeAll/afterAll, a global setup) is blocking; it does so without any mutant, so check the suite on its own`);
         emit({ type: 'warning', message: `wall-clock backstop: mutants ${[...hung].join(', ')} declared hung` });
-        for (const m of hung) {
-          merged.tests.push({ id: '__backstop__', name: 'backstop', file: '', state: 'fail', duration: budgetMs, tries: [[m, 'T', 'wall-clock backstop']] });
+        // Each hung try is credited to the test it was running.
+        for (const { test, mutant } of inFlight) {
+          const t = tests.get(`${pkgId}::${test}`);
+          merged.tests.push({ id: test, name: t?.name ?? test, file: t?.file ?? '', state: 'fail', duration: budgetMs, tries: [[mutant, 'T', 'wall-clock backstop']] });
         }
         const pkg = runnerPackages.find((p) => p.id === pkgId)!;
         s = sessionFor(pkg);
@@ -1004,7 +1032,8 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
             }
           }
         }
-        for (const it of byNum.values()) emit({ type: 'progress', decided: decidedCount() + (it.killedBy ? 1 : 0), total });
+        // Isolated verdicts enter the results at the end: until then, count the kills so far.
+        emit({ type: 'progress', decided: decidedCount() + items.filter((it) => it.killedBy).length, total });
       };
 
       const pkgById = new Map(runnerPackages.map((p) => [p.id, p]));
@@ -1072,10 +1101,21 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         if (process.env.TZAP_DEBUG) process.stderr.write(`tzap debug: isolated ${items.length} mutants in ${jobs.length} runs on ${lanes} lanes, ${Math.round(performance.now() - isoStart)} ms; files per run ${jobs.map((j) => j.assign.size).join(",")}
 `);
       };
-      await runJobs(jobs);
+      /**
+       * One package's jobs at a time, in package order. A mutant has at most one job per package,
+       * so within a package no two lanes race over it; a mutant killed in an earlier package is
+       * skipped in a later one whatever the timing, and the test credited never depends on it.
+       */
+      const runByPackage = async (all: Job[]) => {
+        for (const pkg of runnerPackages) {
+          const mine = all.filter((j) => j.pkgId === pkg.id);
+          if (mine.length > 0) await runJobs(mine);
+        }
+      };
+      await runByPackage(jobs);
       // The second pass: the static mutants the first did not kill, in the rest of their files.
       const survivors = passes[1]!.filter((p) => !p.it.killedBy);
-      if (survivors.length > 0) await runJobs(buildJobs(survivors));
+      if (survivors.length > 0) await runByPackage(buildJobs(survivors));
 
       for (const it of items) {
         const base: MutantResult = { ...it.d, status: 'Survived', coveredBy: [...it.coveredBy].sort(), testsCompleted: it.tested, ...(it.isStatic ? { static: true } : {}) };

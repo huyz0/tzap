@@ -10,6 +10,7 @@ import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { analyse, loadCache, saveCache } from '@tzap/core';
+import { parseModel } from '@tzap/model';
 import { aridFilters } from '@tzap/instrument';
 import type { AnalysisResult, MutantResult, ProjectModel } from '@tzap/model';
 import { jsonReport } from '@tzap/report';
@@ -152,6 +153,27 @@ describe('the cache', () => {
     const fresh = await run(m);
     expect(verdicts(second)).toEqual(verdicts(fresh));
   }, 180_000);
+});
+
+describe('monorepo', () => {
+  // lib has no tests; app's tests reach it through the workspace link `@mono/lib`.
+  const monoModel = (file: string): ProjectModel => ({ ...parseModel(readFileSync(path.join(fixture('monorepo'), file), 'utf8')).model, root: fixture('monorepo') });
+  const libVerdicts = (r: AnalysisResult) => Object.fromEntries(Object.entries(verdicts(r)).filter(([k]) => k.startsWith('packages/lib/')));
+
+  for (const file of ['model.json', 'model-root.json']) {
+    it(`${file}: another package's tests kill a test-less library's mutants, in a full run and a diff run alike`, async () => {
+      const m = monoModel(file);
+      const full = await run(m);
+      const lib = libVerdicts(full);
+      expect(Object.keys(lib).length).toBeGreaterThan(0);
+      expect(Object.values(lib)).not.toContain('NoCoverage');
+      const lines = new Map([['packages/lib/src/index.ts', [[1, 3]] as const]]);
+      const events: string[] = [];
+      const diff = await run(m, { lines, onEvent: (e) => e.type === 'narrowed' && events.push(`${e.files}/${e.of}`) });
+      expect(events).toEqual(['1/1']);
+      expect(verdicts(diff)).toEqual(Object.fromEntries(Object.entries(lib).filter(([k]) => /:[1-3]:/.test(k))));
+    }, 180_000);
+  }
 });
 
 describe('coverage repeats', () => {

@@ -23,17 +23,6 @@ export type MutantStatus =
   | 'Ignored'
   | 'Pending';
 
-export const MUTANT_STATUSES: readonly MutantStatus[] = [
-  'Killed',
-  'Survived',
-  'NoCoverage',
-  'Timeout',
-  'CompileError',
-  'RuntimeError',
-  'Ignored',
-  'Pending',
-];
-
 /** A mutant as the inventory knows it, before anything has run. */
 export interface MutantDescriptor {
   /**

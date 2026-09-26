@@ -157,8 +157,9 @@ export function parseModel(text: string): ParsedModel {
 }
 
 /**
- * Serialises a model deterministically: two-space indentation, keys in declaration order,
- * trailing newline. `parse(serialise(m))` round-trips byte for byte.
+ * Serialises a model: two-space indentation, keys in the order the object has them, trailing
+ * newline. Serialising a parsed model gives back the text it was parsed from, when that text was
+ * itself written by this function.
  */
 export function serialiseModel(model: ProjectModel): string {
   return `${JSON.stringify(model, null, 2)}\n`;

@@ -1,16 +1,19 @@
 /**
  * The incremental cache. Plain text in sorted sections, so a diff of it shows what changed.
  *
- * Reuse rules, each individually tested:
+ * Reuse rules:
  * - Nothing changed at all (same fingerprint over every source, test and config file, same
  *   toolchain): every verdict is reused and no test runs.
  * - Killed / Timeout (from a loop or hit guard): reused when the killing test still reaches the
  *   mutant and nothing that test can reach has changed (its import-closure hash is the same).
  * - Survived: reused when exactly the same tests reach it and none of their closures changed.
- *   For a static mutant, "reach" means every test of the files that load it: the tests an
- *   isolated run decides it with.
+ * - A static mutant, whatever its verdict: reused when the same tests would decide it (every test
+ *   of the files that load it) and none of their closures changed. Its verdict came from running
+ *   those files, and may name a file or an unhandled error rather than a test.
  * - Never reused: a wall-clock Timeout (not reproducible) and RuntimeError.
- * The cache records the toolchain that wrote it and is ignored under a different one.
+ * The cache records the toolchain that wrote it (the settings that can change a verdict
+ * included) and is ignored under a different one. A full run rewrites it whole; a diff run
+ * updates what it decided and keeps the rest.
  */
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -39,16 +42,24 @@ export interface Cache {
   unchanged: boolean;
   entries: Map<string, Entry>;
   tests: Map<string, TestInfo>;
+  /** Tests that failed with no mutant active, as last seen. */
+  red: Map<string, RedTest>;
   killers: Map<string, string>;
   note?: string;
   reuse(m: MutantDescriptor, coverage: MutantCoverage): MutantResult | undefined;
-  lookupUnchanged?: { lookup(m: MutantDescriptor): MutantResult | undefined; tests: TestInfo[] };
+  lookupUnchanged?: { lookup(m: MutantDescriptor): MutantResult | undefined; tests: TestInfo[]; red: RedTest[] };
 }
+
+type RedTest = AnalysisResult['redTests'][number];
 
 export interface CacheSettings {
   tzapVersion: string;
   mutators: readonly string[] | undefined;
   filters: readonly string[];
+  /** Type checking changes CompileError verdicts. */
+  typecheck?: string;
+  /** Survivor verification changes Survived verdicts. */
+  verifySurvivors?: string;
 }
 
 const INPUT_GLOBS = ['**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs,vue,svelte,json,snap}', '**/.babelrc', '**/*.lock', '**/.npmrc'];
@@ -84,6 +95,8 @@ function toolchainOf(model: ProjectModel, s: CacheSettings): Record<string, stri
     platform: process.platform,
     mutators: s.mutators ? [...s.mutators].sort().join(',') : 'all',
     filters: [...s.filters].sort().join(',') || 'none',
+    typecheck: s.typecheck ?? 'off',
+    verify: s.verifySurvivors ?? 'auto',
   };
   for (const p of model.packages) if (p.runner) t[`runner:${p.id}`] = `${p.runner.kind}@${p.runner.version ?? '?'}`;
   return t;
@@ -96,6 +109,7 @@ export function loadCache(dir: string, model: ProjectModel, settings: CacheSetti
   const fp = fingerprint(model);
   const entries = new Map<string, Entry>();
   const tests = new Map<string, TestInfo>();
+  const red = new Map<string, RedTest>();
   let storedToolchain: Record<string, string> = {};
   let storedFingerprint = '';
   let note: string | undefined;
@@ -115,10 +129,16 @@ export function loadCache(dir: string, model: ProjectModel, settings: CacheSetti
       if (section === '[toolchain]') storedToolchain[key] = value;
       else if (section === '[fingerprint]') storedFingerprint = key || value;
       else if (section === '[tests]') tests.set(key, JSON.parse(value) as TestInfo);
+      else if (section === '[red]') red.set(key, JSON.parse(value) as RedTest);
       else if (section === '[mutants]') entries.set(key, JSON.parse(value) as Entry);
     }
   } catch (e) {
     if ((e as { code?: string }).code !== 'ENOENT') note = `cache in ${dir} could not be read and is ignored: ${(e as Error).message}`;
+    // Ignored means ignored: nothing read before the error is trusted either.
+    storedToolchain = {};
+    entries.clear();
+    tests.clear();
+    red.clear();
   }
   const toolchainMatches = Object.keys(storedToolchain).length > 0 && JSON.stringify(Object.entries(storedToolchain).sort()) === JSON.stringify(Object.entries(toolchain).sort());
   if (!toolchainMatches && entries.size > 0) {
@@ -126,6 +146,7 @@ export function loadCache(dir: string, model: ProjectModel, settings: CacheSetti
     note = `cache written under a different toolchain (${diff.join(', ')}); not reused`;
     entries.clear();
     tests.clear();
+    red.clear();
   }
   const unchanged = toolchainMatches && storedFingerprint === fp;
   const killers = new Map<string, string>();
@@ -138,6 +159,7 @@ export function loadCache(dir: string, model: ProjectModel, settings: CacheSetti
     unchanged,
     entries,
     tests,
+    red,
     killers,
     note,
     reuse(m, coverage) {
@@ -148,20 +170,20 @@ export function loadCache(dir: string, model: ProjectModel, settings: CacheSetti
         return stored !== undefined && stored === coverage.closures.get(key);
       };
       if (e.status === 'RuntimeError' || e.statusReason === 'wall-clock backstop') return undefined;
-      if (e.status === 'Killed' || e.status === 'Timeout') {
-        const killer = e.killedBy?.[0];
-        if (!killer) return undefined;
-        if (e.static ? !coverage.static : !coverage.tests.includes(killer)) return undefined;
-        if (!closureSame(killer)) return undefined;
-        return { ...m, ...e, status: e.status };
-      }
-      // A static survivor: the isolated runs that decided it ran exactly these tests.
-      if (e.status === 'Survived' && e.static && coverage.static && coverage.ran) {
-        if (!sameSet(e.coveredBy, coverage.ran)) return undefined;
+      if (!!e.static !== coverage.static) return undefined;
+      // A static mutant: the isolated runs that decided it ran exactly these tests' files.
+      if (e.static) {
+        if (!coverage.ran || !sameSet(e.coveredBy, coverage.ran)) return undefined;
         if (!coverage.ran.every(closureSame)) return undefined;
         return { ...m, ...e, status: e.status };
       }
-      if (e.status === 'Survived' && !e.static && !coverage.static) {
+      if (e.status === 'Killed' || e.status === 'Timeout') {
+        const killer = e.killedBy?.[0];
+        if (!killer || !coverage.tests.includes(killer)) return undefined;
+        if (!closureSame(killer)) return undefined;
+        return { ...m, ...e, status: e.status };
+      }
+      if (e.status === 'Survived') {
         if (!sameSet(e.coveredBy, coverage.tests)) return undefined;
         if (!coverage.tests.every(closureSame)) return undefined;
         return { ...m, ...e, status: e.status };
@@ -177,16 +199,22 @@ export function loadCache(dir: string, model: ProjectModel, settings: CacheSetti
         return { ...m, ...e, status: e.status };
       },
       tests: [...tests.values()],
+      red: [...red.values()],
     };
   }
   return cache;
 }
 
 export function saveCache(cache: Cache, result: AnalysisResult): void {
-  // Carry forward entries this run did not decide (a diff run touches a subset).
-  const entries = new Map(cache.entries);
-  const tests = new Map(cache.tests);
+  // A full run saw every mutant and every test: what it did not see is gone (a deleted mutant, a
+  // renamed test). A diff run saw a subset: carry forward the rest.
+  const full = result.config.scope === 'full';
+  const entries = new Map(full ? [] : cache.entries);
+  const tests = new Map(full ? [] : cache.tests);
+  const red = new Map(full ? [] : cache.red);
+  for (const t of [...result.tests, ...result.redTests]) red.delete(t.id);
   for (const t of result.tests) tests.set(t.id, t);
+  for (const t of result.redTests) red.set(t.id, { id: t.id, name: t.name, file: t.file, message: t.message });
   for (const m of result.mutants) {
     if (m.status === 'Ignored' || m.status === 'Pending') continue;
     const e: Entry = { status: m.status };
@@ -204,6 +232,8 @@ export function saveCache(cache: Cache, result: AnalysisResult): void {
   lines.push('[fingerprint]', `${cache.fingerprint}\t`);
   lines.push('[tests]');
   for (const [k, v] of [...tests].sort(([a], [b]) => (a < b ? -1 : 1))) lines.push(`${k}\t${JSON.stringify({ id: v.id, name: v.name, file: v.file, duration: v.duration, closure: v.closure })}`);
+  lines.push('[red]');
+  for (const [k, v] of [...red].sort(([a], [b]) => (a < b ? -1 : 1))) lines.push(`${k}\t${JSON.stringify(v)}`);
   lines.push('[mutants]');
   for (const [k, v] of [...entries].sort(([a], [b]) => (a < b ? -1 : 1))) lines.push(`${k}\t${JSON.stringify(v)}`);
   mkdirSync(cache.dir, { recursive: true });

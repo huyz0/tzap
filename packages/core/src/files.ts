@@ -2,15 +2,16 @@ import path from 'node:path';
 import { globSync } from 'tinyglobby';
 import type { PackageModel } from '@tzap/model';
 
-/** Test files are never mutated, whatever the source globs say. */
-export const DEFAULT_TEST_GLOBS = [
+/** Test files are never mutated: these, unless the package names its own. */
+const DEFAULT_TEST_GLOBS = [
   '**/*.{test,spec}.?(c|m)[jt]s?(x)',
   '**/__tests__/**',
   '**/test/**',
   '**/tests/**',
 ];
 
-const ALWAYS_EXCLUDED = ['**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/*.d.ts', '**/*.d.mts', '**/*.d.cts', '**/.tzap/**'];
+/** Never mutated, whatever the model says: installed and built code, declarations, mocks. */
+const ALWAYS_EXCLUDED = ['**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/*.d.ts', '**/*.d.mts', '**/*.d.cts', '**/.tzap/**', '**/__mocks__/**'];
 
 export const toPosix = (p: string) => p.replace(/\\/g, '/');
 

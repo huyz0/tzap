@@ -200,7 +200,13 @@ function runnerVersion(name: string, pkgDir: string): string | undefined {
     const found = req.resolve(`${name}/package.json`);
     // Only an install in a node_modules above the package is the project's own; a global or
     // host-process path is not what the project's test command would run.
-    const within = (p: string) => path.resolve(pkgDir).toLowerCase().startsWith(path.dirname(p.slice(0, p.toLowerCase().lastIndexOf(`${path.sep}node_modules${path.sep}`) + 1)).toLowerCase());
+    const within = (p: string) => {
+      const at = p.toLowerCase().lastIndexOf(`${path.sep}node_modules${path.sep}`);
+      if (at === -1) return false;
+      const owner = p.slice(0, at).toLowerCase();
+      const dir = path.resolve(pkgDir).toLowerCase();
+      return dir === owner || dir.startsWith(owner + path.sep);
+    };
     const v = within(found) ? readJson(found)?.version : undefined;
     if (typeof v === 'string') return v;
   } catch {
