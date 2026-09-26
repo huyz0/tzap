@@ -23,7 +23,7 @@
  *   and async hook the run installed.
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { globSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { globSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import * as nodeModule from 'node:module';
 import path from 'node:path';
@@ -32,6 +32,19 @@ import type { FileOutcome, RunMode, RunRequest, RunResult, SessionOptions, TestO
 import { activateStatic, beginTry, drainHits, endTry, install, type TzapRuntime } from '@tzap/runtime';
 
 const require = createRequire(import.meta.url);
+
+/**
+ * The path Node's resolver reports for a file: symlinks resolved (macOS's /var is /private/var).
+ * Lookups keyed by the paths tzap was given also take this form; what is reported keeps the form
+ * it was given, since the engine relates it to the model root.
+ */
+function realPath(p: string): string {
+  try {
+    return realpathSync.native(p);
+  } catch {
+    return p;
+  }
+}
 
 /** The subset of a node:test TestContext the executor reads. */
 interface Ctx {
@@ -195,11 +208,14 @@ export class Executor {
   /** Sites per instrumented module (normalised path). */
   private readonly sitesOf = new Map<string, number[]>();
   private readonly shimDir: string;
-  private readonly shimDirUrl: string;
   private readonly shimMjs: string;
   private readonly shimCjs: string;
   private readonly prelude: string;
   private readonly sentinel: string;
+  /** The prelude and sentinel, as given and as resolved: both must re-evaluate every run. */
+  private readonly synthetic: Set<string>;
+  /** The shim directory's URL, as given and as resolved. */
+  private readonly shimDirUrls: string[];
   /** Modules (normalised path) re-evaluated every run: test files and whatever imports node:test. */
   private readonly reEval = new Set<string>();
   /** Import edges seen by the resolve hook, normalised paths. */
@@ -217,17 +233,17 @@ export class Executor {
     this.rt = install();
     const map = JSON.parse(readFileSync(o.session.instrumented, 'utf8')) as Record<string, { code: string; map: unknown }>;
     for (const [file, v] of Object.entries(map)) {
-      const key = norm(path.resolve(file));
-      this.instrumented.set(key, v.code);
       const sites = new Set<number>();
       for (const m of v.code.matchAll(/__tzap\.c\[(\d+)\]/g)) sites.add(Number(m[1]));
-      this.sitesOf.set(key, [...sites]);
+      for (const key of new Set([norm(path.resolve(file)), norm(realPath(path.resolve(file)))])) {
+        this.instrumented.set(key, v.code);
+        this.sitesOf.set(key, [...sites]);
+      }
     }
     this.allFiles = findTestFiles(this.pkgRoot, o.session.pkg.tests);
 
     this.shimDir = o.dir;
     mkdirSync(this.shimDir, { recursive: true });
-    this.shimDirUrl = pathToFileURL(this.shimDir + path.sep).href;
     this.shimMjs = path.join(this.shimDir, 'node-test.mjs');
     this.shimCjs = path.join(this.shimDir, 'node-test.cjs');
     this.prelude = path.join(this.shimDir, 'prelude.mjs');
@@ -240,6 +256,8 @@ export class Executor {
     writeFileSync(this.shimCjs, `module.exports = globalThis.__tzapNodeTest.api;\n`);
     writeFileSync(this.prelude, `globalThis.__tzapNodeTest.prelude();\n`);
     writeFileSync(this.sentinel, `globalThis.__tzapNodeTest.sentinel();\n`);
+    this.synthetic = new Set([this.prelude, this.sentinel].flatMap((f) => [norm(f), norm(realPath(f))]));
+    this.shimDirUrls = [...new Set([this.shimDir, realPath(this.shimDir)])].map((d) => pathToFileURL(d + path.sep).href);
 
     (globalThis as unknown as { __tzapNodeTest: object }).__tzapNodeTest = {
       api: this.buildApi(),
@@ -261,7 +279,7 @@ export class Executor {
     registerHooks({
       resolve: (specifier: string, context: Ctx, next: (s: string, c: Ctx) => Res): Res => {
         const parent = context.parentURL;
-        if (specifier === 'node:test' && parent && !parent.startsWith(this.shimDirUrl)) {
+        if (specifier === 'node:test' && parent && !this.shimDirUrls.some((u) => parent.startsWith(u))) {
           const p = urlToNorm(parent);
           if (p && !this.reEval.has(p) && this.state) this.reEval.add(p);
           const cjs = context.conditions?.includes('require') && !context.conditions.includes('import');
@@ -287,7 +305,7 @@ export class Executor {
             this.collectOutside();
             st.currentFile = entry;
           }
-          if (this.reEval.has(child) || entry !== undefined || child === norm(this.prelude) || child === norm(this.sentinel)) {
+          if (this.reEval.has(child) || entry !== undefined || this.synthetic.has(child)) {
             return { ...r, url: `${cleanUrl(r.url)}?tzap=${st.n}` };
           }
         }
@@ -590,7 +608,7 @@ export class Executor {
       plan,
       staticMutant: req.staticMutant ?? -1,
       phase: 'register',
-      files: new Map(files.map((f) => [norm(f), f])),
+      files: new Map(files.flatMap((f) => [[norm(realPath(f)), f] as const, [norm(f), f] as const])),
       currentFile: undefined,
       ordinals: new Map(),
       infos: [],
@@ -696,7 +714,7 @@ export class Executor {
   private staticHitsFor(file: string, outside: Map<number, number>): Array<[number, number]> {
     if (outside.size === 0) return [];
     const seen = new Set<string>();
-    const stack = [norm(file)];
+    const stack = [norm(realPath(file))];
     while (stack.length) {
       const m = stack.pop()!;
       if (seen.has(m)) continue;

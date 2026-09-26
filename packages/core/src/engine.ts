@@ -570,7 +570,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
           // An unhandled error failed the run, and no try owns it: every mutant tried here that no
           // test killed is decided on its own, in isolation, where the error is attributable.
           if (res.unhandledErrors?.length && !noisyUnhandled.has(pkgId)) {
-            for (const list of plan.values()) for (const tr of list) if (tr.m >= 0 && !verdicts.get(tr.m)?.killedBy) unreached.add(tr.m);
+            for (const list of plan.values()) for (const tr of list) if (tr.m >= 0 && !verdicts.get(tr.m)?.kills.length) unreached.add(tr.m);
           }
           // A planned try the runner never reported on decided nothing: try it again.
           const reported = new Set(res.tests.flatMap((t) => (t.tries ?? []).map(([m]) => `${t.id}\0${m}`)));
@@ -589,15 +589,17 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
 
       const decide = (p: Pending, o: Outcome | undefined) => {
         p.completed += o?.tested ?? 0;
-        if (o?.timeout) {
-          results.set(p.d.num, { ...p.d, status: 'Timeout', statusReason: o.message ?? 'declared hung', coveredBy: p.tests, killedBy: o.killedBy ? [o.killedBy] : [] });
-          return true;
-        }
-        if (o?.killedBy) {
-          results.set(p.d.num, { ...p.d, status: 'Killed', statusReason: o.message, killedBy: [o.killedBy], coveredBy: p.tests, testsCompleted: p.completed });
-          return true;
-        }
-        return false;
+        if (!o?.kills.length) return false;
+        // Several tests can kill a mutant in one round; which of them reports first depends on
+        // scheduling. The one credited is the earliest in the mutant's own test order.
+        const rank = (k: string) => {
+          const i = p.tests.indexOf(k);
+          return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+        };
+        const kill = o.kills.reduce((a, b) => (rank(b.key) < rank(a.key) || (rank(b.key) === rank(a.key) && b.key < a.key) ? b : a));
+        if (kill.timeout) results.set(p.d.num, { ...p.d, status: 'Timeout', statusReason: kill.message ?? 'declared hung', coveredBy: p.tests, killedBy: [kill.key] });
+        else results.set(p.d.num, { ...p.d, status: 'Killed', statusReason: kill.message, killedBy: [kill.key], coveredBy: p.tests, testsCompleted: p.completed });
+        return true;
       };
       const survive = (p: Pending) => {
         // Survived every test the warm engine could trust. Confirmed in isolation unless told not
@@ -674,9 +676,8 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
     }
 
     interface Outcome {
-      killedBy?: string;
-      timeout?: boolean;
-      message?: string;
+      /** Every try that killed the mutant this round. */
+      kills: Array<{ key: string; timeout: boolean; message?: string }>;
       tested: number;
     }
 
@@ -698,7 +699,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
             continue;
           }
           let o = verdicts.get(m);
-          if (!o) verdicts.set(m, (o = { tested: 0 }));
+          if (!o) verdicts.set(m, (o = { kills: [], tested: 0 }));
           if (outcome === 'X') continue;
           if (bracketFailed || (interleave && !clean)) {
             let set = dirty.get(m);
@@ -711,11 +712,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
             continue;
           }
           o.tested++;
-          if ((outcome === 'K' || outcome === 'T') && o.killedBy === undefined) {
-            o.killedBy = key;
-            o.timeout = outcome === 'T';
-            o.message = message;
-          }
+          if (outcome === 'K' || outcome === 'T') o.kills.push({ key, timeout: outcome === 'T', ...(message !== undefined ? { message } : {}) });
         }
       }
     }
@@ -947,13 +944,17 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
             if (/declared hung/.test(f.error)) it.timeout = true;
           }
         }
+        // Of the tests that killed a mutant in this run, the lowest id is credited: the order
+        // they report in depends on scheduling.
+        const decided = new Set([...byNum.values()].filter((it) => it.killedBy));
         for (const t of res.tests) {
           for (const [m, outcome, msg] of t.tries ?? []) {
             const it = byNum.get(m);
             if (!it) continue;
             it.tested++;
-            if ((outcome === 'K' || outcome === 'T') && !it.killedBy) {
-              it.killedBy = `${job.pkgId}::${t.id}`;
+            const key = `${job.pkgId}::${t.id}`;
+            if ((outcome === 'K' || outcome === 'T') && !decided.has(it) && (!it.killedBy || key < it.killedBy)) {
+              it.killedBy = key;
               it.timeout = outcome === 'T';
               it.message = msg;
             }

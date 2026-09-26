@@ -50,13 +50,14 @@ const SKIP = 'tzap: skipped, mutant already killed in this run';
 
 interface WorkerState {
   runId: number;
+  file: string | undefined;
   killed: Set<number>;
   progress: ReturnType<typeof progressWriter> | null;
 }
 
 function workerState(): WorkerState {
   const g = globalThis as unknown as { __tzapWorker?: WorkerState };
-  g.__tzapWorker ??= { runId: -1, killed: new Set(), progress: null };
+  g.__tzapWorker ??= { runId: -1, file: undefined, killed: new Set(), progress: null };
   return g.__tzapWorker;
 }
 
@@ -76,8 +77,13 @@ export function setup(vitest: Vitest): void {
   const rt: TzapRuntime = install();
   const payload = (vitest.inject('tzap') ?? { runId: 0, mode: 'coverage' }) as Payload;
   const ws = workerState();
-  if (ws.runId !== payload.runId) {
+  const currentFile = (globalThis as { __vitest_worker__?: { filepath?: string } }).__vitest_worker__?.filepath;
+  // A kill skips the mutant's later tries in the same file only. Across files it would depend on
+  // which files share a worker, and so would which test is credited with the kill: a report must
+  // not change with the worker count.
+  if (ws.runId !== payload.runId || ws.file !== currentFile) {
     ws.runId = payload.runId;
+    ws.file = currentFile;
     ws.killed = new Set();
   }
   if (ws.progress === null) ws.progress = progressWriter(process.env[PROGRESS_DIR_ENV], `${process.pid}-${threadId}`);
@@ -91,7 +97,6 @@ export function setup(vitest: Vitest): void {
   const plan = payload.plan ?? {};
   // Static mode: active before the test file imports anything, since this setup file runs first.
   // With a per-file plan, each test file (each with its own module graph) gets its own mutant.
-  const currentFile = (globalThis as { __vitest_worker__?: { filepath?: string } }).__vitest_worker__?.filepath;
   const staticMutant = payload.staticPlan && currentFile ? (payload.staticPlan[normPath(currentFile)] ?? -1) : (payload.staticMutant ?? -1);
   if (payload.mode === 'static') activateStatic(rt, staticMutant, payload.staticLimit);
 
