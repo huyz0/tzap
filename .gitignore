@@ -6,3 +6,4 @@ reports/
 *.log
 *.tsbuildinfo
 .tzap-test-tmp/
+dist-npm/
