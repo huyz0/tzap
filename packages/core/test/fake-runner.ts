@@ -37,6 +37,8 @@ export interface Script {
   loadError?(file: string, mutant: number): string | undefined;
   /** Unhandled errors a run with these active mutants reports, with the file each is attributed to. */
   unhandled?(mutants: number[], mode: 'coverage' | 'mutate' | 'static'): Array<{ error: string; file?: string }>;
+  /** Mutants after whose try the next unmutated try of the test stalls the session (warm runs). */
+  stallsControl?: ReadonlySet<number>;
   /** Hangs while loading, before any try starts, when this mutant is active. */
   hangsLoading?: ReadonlySet<number>;
   staticPerFile?: boolean;
@@ -91,6 +93,7 @@ export function fakeRunner(script: Script): { factory: RunnerFactory; log: FakeL
           result.files.push({ file: abs(f), ...(error ? { error } : {}) });
         }
         const killed = new Set<number>();
+        const stalling = new Set<string>();
         for (const [id, plan] of Object.entries(req.plan ?? {})) {
           const t = byId.get(id)!;
           if (failedFiles.has(t.file)) continue;
@@ -98,6 +101,7 @@ export function fakeRunner(script: Script): { factory: RunnerFactory; log: FakeL
           for (const tr of plan) {
             const m = mode === 'static' ? mutantOf(t.file) : tr.m;
             if (m < 0) {
+              if (stalling.has(id)) return { id: req.id, durationMs: 1, tests: [], files: [], timedOut: true, inFlight: [{ test: id, mutant: -1 }] };
               out.tries!.push([m, tainted.has(id) || poisoned.has(id) ? 'K' : 'S']);
               tainted.delete(id);
               continue;
@@ -112,6 +116,7 @@ export function fakeRunner(script: Script): { factory: RunnerFactory; log: FakeL
             out.tries!.push(b === 'K' ? [m, b, `${id} failed with ${m}`] : [m, b]);
             if (script.corrupts?.has(m)) tainted.add(id);
             if (script.poisons?.has(m)) poisoned.add(id);
+            if (script.stallsControl?.has(m)) stalling.add(id);
           }
           if (!script.unreported?.has(id)) result.tests.push(out);
         }

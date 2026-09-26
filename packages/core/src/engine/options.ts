@@ -32,7 +32,7 @@ export interface EngineOptions {
    * true). A package whose baseline is not clean in threads falls back to its own setting.
    */
   preferThreads?: boolean;
-  /** Concurrent sessions for the reference engine. */
+  /** Sessions deciding isolated mutants at once: every mutant under the reference engine, static and re-decided ones under the warm. Default: from the cores. */
   concurrency?: number;
   /** Previously killing test per mutant id, from the cache: tried first. */
   previousKillers?: ReadonlyMap<string, string>;

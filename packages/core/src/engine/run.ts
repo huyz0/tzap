@@ -113,6 +113,14 @@ export function control(t: TestRecord): Try {
   return { m: -1, N: Infinity, L: Math.max(LOOP_FLOOR, LOOP_FACTOR * t.loops) };
 }
 
+/**
+ * Closes sessions, all of them whatever any one does: a session that fails to close must neither
+ * leave the others running nor replace the analysis's own result or error.
+ */
+export async function closeAll(sessions: Iterable<RunnerSession>): Promise<void> {
+  await Promise.allSettled([...sessions].map((s) => s.close()));
+}
+
 /** Adds `value` to the set under `key`, creating it. */
 export function addTo<K, V>(map: Map<K, Set<V>>, key: K, value: V): void {
   let set = map.get(key);

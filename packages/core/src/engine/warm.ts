@@ -66,7 +66,8 @@ export async function warmEngine(run: EngineRun, covered: Pending[]): Promise<Is
     const started = performance.now();
     const r: Round = { verdicts: new Map(), dirty: new Map(), unreached: new Set() };
     for (const [pkgId, plan] of byPkg) {
-      const res = await runWithRecovery(run, pkgId, Object.fromEntries(plan));
+      const { res, stalled } = await runWithRecovery(run, pkgId, Object.fromEntries(plan));
+      for (const m of stalled) r.unreached.add(m);
       collect(pkgId, res, r, interleave);
       // An unhandled error failed the run, and no try owns it: every mutant tried here that no
       // test killed is decided on its own, in isolation, where the error is attributable.
@@ -174,10 +175,13 @@ export async function warmEngine(run: EngineRun, covered: Pending[]): Promise<Is
 /**
  * Folds one run's tries into verdicts. Bracketed (`interleave` false): a test's tries count only
  * if both controls around them passed. Interleaved: a try counts if the control just before it
- * passed. A try that does not count makes its (mutant, test) pair dirty; one that counts but
- * never reached the mutant makes the mutant unreached.
+ * passed. A try that does not count makes its (mutant, test) pair dirty, and so does a try
+ * skipped for a kill that did not count; one that counts but never reached the mutant makes the
+ * mutant unreached.
  */
 function collect(pkgId: string, res: RunResult, round: Round, interleave: boolean): void {
+  /** Tries the runner skipped because the mutant was already killed in this run. */
+  const skipped = new Map<number, Set<string>>();
   for (const t of res.tests) {
     const tries = t.tries ?? [];
     const key = `${pkgId}::${t.id}`;
@@ -190,7 +194,10 @@ function collect(pkgId: string, res: RunResult, round: Round, interleave: boolea
       }
       let o = round.verdicts.get(m);
       if (!o) round.verdicts.set(m, (o = { kills: [], tested: 0 }));
-      if (outcome === 'X') continue;
+      if (outcome === 'X') {
+        addTo(skipped, m, key);
+        continue;
+      }
       if (bracketFailed || (interleave && !clean)) {
         addTo(round.dirty, m, key);
         continue;
@@ -203,10 +210,18 @@ function collect(pkgId: string, res: RunResult, round: Round, interleave: boolea
       if (outcome === 'K' || outcome === 'T') o.kills.push({ key, timeout: outcome === 'T', ...(message !== undefined ? { message } : {}) });
     }
   }
+  // A skip rests on the kill that caused it. When no kill of the mutant counted (its try ran in
+  // untrusted state), the skipped tries decided nothing: they are tried again.
+  for (const [m, keys] of skipped) if (!round.verdicts.get(m)?.kills.length) for (const k of keys) addTo(round.dirty, m, k);
 }
 
-/** Runs a plan; if a hang outlives the budget, marks what was in flight as Timeout and retries the rest. */
-async function runWithRecovery(run: EngineRun, pkgId: string, plan: Record<string, Try[]>): Promise<RunResult> {
+/**
+ * Runs a plan; if a hang outlives the budget, marks the mutant tries in flight Timeout and runs
+ * the rest again. A run that goes silent with no mutant try in flight (a control, or a hook
+ * between tries, blocked — by state an earlier mutant left) names no culprit: its remaining
+ * mutants are `stalled`, for the isolated path to decide one at a time.
+ */
+async function runWithRecovery(run: EngineRun, pkgId: string, plan: Record<string, Try[]>): Promise<{ res: RunResult; stalled: Set<number> }> {
   const { tests, silenceMs: budgetMs } = run;
   const merged: RunResult = { id: 0, tests: [], files: [], durationMs: 0 };
   let remaining = plan;
@@ -222,20 +237,23 @@ async function runWithRecovery(run: EngineRun, pkgId: string, plan: Record<strin
         merged.unhandledErrors = [...(merged.unhandledErrors ?? []), ...res.unhandledErrors];
         merged.unhandledErrorFiles = [...(merged.unhandledErrorFiles ?? []), ...res.unhandledErrors.map((_, i) => res.unhandledErrorFiles?.[i] ?? null)];
       }
-      return merged;
+      return { res: merged, stalled: new Set() };
     }
     const inFlight = (res.inFlight ?? []).filter((x) => x.mutant >= 0);
     const hung = new Set(inFlight.map((x) => x.mutant));
-    if (hung.size === 0) throw new Error(`a test run went silent for ${Math.round(budgetMs / 1000)} s with no mutant try in flight: a hook outside any test (beforeAll/afterAll, a global setup) is blocking; it does so without any mutant, so check the suite on its own`);
+    if (hung.size === 0) {
+      const stalled = new Set(Object.values(remaining).flatMap((l) => l.map((t) => t.m)).filter((m) => m >= 0));
+      run.emit({ type: 'warning', message: `a test run went silent for ${Math.round(budgetMs / 1000)} s with no mutant try in flight; its ${stalled.size} remaining mutants are decided in isolation` });
+      await restart(run, pkgId);
+      return { res: merged, stalled };
+    }
     run.emit({ type: 'warning', message: `wall-clock backstop: mutants ${[...hung].join(', ')} declared hung` });
     // Each hung try is credited to the test it was running.
     for (const { test, mutant } of inFlight) {
       const t = tests.get(`${pkgId}::${test}`);
       merged.tests.push({ id: test, name: t?.name ?? test, file: t?.file ?? '', state: 'fail', duration: budgetMs, tries: [[mutant, 'T', 'wall-clock backstop']] });
     }
-    const s = run.sessionFor(run.runnerPackages.find((p) => p.id === pkgId)!);
-    await s.start();
-    run.warm.set(pkgId, s);
+    await restart(run, pkgId);
     const next: Record<string, Try[]> = {};
     for (const [test, list] of Object.entries(remaining)) {
       const kept = list.filter((t) => !hung.has(t.m));
@@ -244,4 +262,11 @@ async function runWithRecovery(run: EngineRun, pkgId: string, plan: Record<strin
     remaining = next;
   }
   throw new Error('too many hung runs in one round');
+}
+
+/** Replaces a package's warm session after the backstop killed its host. */
+async function restart(run: EngineRun, pkgId: string): Promise<void> {
+  const s = run.sessionFor(run.runnerPackages.find((p) => p.id === pkgId)!);
+  run.warm.set(pkgId, s);
+  await s.start();
 }

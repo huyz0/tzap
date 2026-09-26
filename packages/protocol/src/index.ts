@@ -38,7 +38,10 @@ export interface RunRequest {
   staticPlan?: Record<string, number>;
   /** `static`: loop and hit limit outside any test, measured from the unmutated files' loading. */
   staticLimit?: number;
-  /** Wall-clock budget for the whole run, after which the session is killed. */
+  /**
+   * Silence window: when no try has started or ended for this long, the session kills the host
+   * and reports the run timed out, naming the tries in flight.
+   */
   budgetMs?: number;
 }
 

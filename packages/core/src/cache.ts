@@ -17,13 +17,17 @@
  * updates what it decided and keeps the rest.
  */
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { globSync } from 'tinyglobby';
 import type { AnalysisResult, MutantDescriptor, MutantResult, ProjectModel, TestInfo } from '@tzap/model';
 import type { MutantCoverage } from './engine/options.js';
 
-const HEADER = '# tzap cache v1';
+const HEADER = '# tzap cache v2';
+
+/** A key as one field of a line: test names may hold tabs and newlines. */
+const escapeKey = (k: string) => k.replace(/[\\\t\n\r]/g, (c) => ({ '\\': '\\\\', '\t': '\\t', '\n': '\\n', '\r': '\\r' })[c]!);
+const unescapeKey = (k: string) => k.replace(/\\([\\tnr])/g, (_, c: string) => ({ '\\': '\\', t: '\t', n: '\n', r: '\r' })[c]!);
 const FILE_NAME = 'tzap-cache.txt';
 
 interface Entry {
@@ -63,28 +67,50 @@ export interface CacheSettings {
   verifySurvivors?: string;
 }
 
-const INPUT_GLOBS = ['**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs,vue,svelte,json,snap}', '**/.babelrc', '**/*.lock', '**/.npmrc'];
-const INPUT_IGNORE = ['**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**', '**/reports/**', '**/.tzap/**', '**/.git/**', '**/.stryker-tmp/**'];
+/** Files read whole: what the code and its tooling are made of. Anything else counts by size and time. */
+const CONTENT = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|vue|svelte|json|snap|lock|ya?ml)$|(^|[\\/])\.(babelrc|npmrc|swcrc)$/;
+const INPUT_IGNORE = [
+  '**/node_modules/**',
+  '**/dist/**',
+  '**/build/**',
+  '**/coverage/**',
+  '**/reports/**',
+  '**/{.git,.tzap,.stryker-tmp,.cache,.turbo,.next,.nuxt,.svelte-kit,.vite,.parcel-cache,.nyc_output}/**',
+];
 
-/** A hash over every file that could change a verdict: sources, tests, snapshots, configs, lockfiles. */
-export function fingerprint(model: ProjectModel): string {
+/**
+ * A hash over every file under the package roots (and the model root's own files): sources, tests,
+ * snapshots, configs, lockfiles, and the fixtures and data tests read. Code and config count by
+ * content; other files by size and modification time, so a large binary costs a stat, and a
+ * touched file only costs the nothing-changed shortcut. `exclude` is a directory to leave out:
+ * the cache's own.
+ */
+export function fingerprint(model: ProjectModel, exclude?: string): string {
   const h = createHash('sha256');
-  const roots = new Set(model.packages.map((p) => path.resolve(model.root, p.root)));
-  roots.add(path.resolve(model.root));
+  const root = path.resolve(model.root);
+  const roots = new Set(model.packages.map((p) => path.resolve(root, p.root)));
+  roots.add(root);
+  const skip = exclude ? path.resolve(exclude) + path.sep : undefined;
   const files = new Set<string>();
   for (const r of roots) {
-    const deep = r !== path.resolve(model.root) || model.packages.some((p) => path.resolve(model.root, p.root) === r);
-    const found = globSync(deep ? INPUT_GLOBS : ['*.{json,yaml,yml,lock,js,mjs,cjs,ts}'], { cwd: r, ignore: INPUT_IGNORE, absolute: true, dot: true });
-    for (const f of found) files.add(path.resolve(f));
+    const deep = r !== root || model.packages.some((p) => path.resolve(root, p.root) === r);
+    for (const f of globSync(deep ? ['**/*'] : ['*'], { cwd: r, ignore: INPUT_IGNORE, absolute: true, dot: true, onlyFiles: true })) {
+      const abs = path.resolve(f);
+      if (!skip || !abs.startsWith(skip)) files.add(abs);
+    }
   }
   for (const f of [...files].sort()) {
-    let content: Buffer;
+    let content: Buffer | string;
     try {
-      content = readFileSync(f);
+      if (CONTENT.test(f)) content = readFileSync(f);
+      else {
+        const st = statSync(f);
+        content = `${st.size}:${st.mtimeMs}`;
+      }
     } catch {
       continue;
     }
-    h.update(path.relative(model.root, f).replace(/\\/g, '/')).update('\0').update(content).update('\n');
+    h.update(path.relative(root, f).replace(/\\/g, '/')).update('\0').update(content).update('\n');
   }
   return h.digest('hex').slice(0, 24);
 }
@@ -143,7 +169,7 @@ const sameSet = (a: readonly string[] = [], b: readonly string[] = []) => a.leng
 
 export function loadCache(dir: string, model: ProjectModel, settings: CacheSettings): Cache {
   const toolchain = toolchainOf(model, settings);
-  const fp = fingerprint(model);
+  const fp = fingerprint(model, dir);
   const entries = new Map<string, Entry>();
   const tests = new Map<string, TestInfo>();
   const red = new Map<string, RedTest>();
@@ -161,7 +187,7 @@ export function loadCache(dir: string, model: ProjectModel, settings: CacheSetti
         continue;
       }
       const tab = line.indexOf('\t');
-      const key = line.slice(0, tab);
+      const key = unescapeKey(line.slice(0, tab));
       const value = line.slice(tab + 1);
       if (section === '[toolchain]') storedToolchain[key] = value;
       else if (section === '[fingerprint]') storedFingerprint = key || value;
@@ -268,11 +294,11 @@ export function saveCache(cache: Cache, result: AnalysisResult): void {
   // must invalidate, not be absorbed.
   lines.push('[fingerprint]', `${cache.fingerprint}\t`);
   lines.push('[tests]');
-  for (const [k, v] of [...tests].sort(([a], [b]) => (a < b ? -1 : 1))) lines.push(`${k}\t${JSON.stringify({ id: v.id, name: v.name, file: v.file, duration: v.duration, closure: v.closure })}`);
+  for (const [k, v] of [...tests].sort(([a], [b]) => (a < b ? -1 : 1))) lines.push(`${escapeKey(k)}\t${JSON.stringify({ id: v.id, name: v.name, file: v.file, duration: v.duration, closure: v.closure })}`);
   lines.push('[red]');
-  for (const [k, v] of [...red].sort(([a], [b]) => (a < b ? -1 : 1))) lines.push(`${k}\t${JSON.stringify(v)}`);
+  for (const [k, v] of [...red].sort(([a], [b]) => (a < b ? -1 : 1))) lines.push(`${escapeKey(k)}\t${JSON.stringify(v)}`);
   lines.push('[mutants]');
-  for (const [k, v] of [...entries].sort(([a], [b]) => (a < b ? -1 : 1))) lines.push(`${k}\t${JSON.stringify(v)}`);
+  for (const [k, v] of [...entries].sort(([a], [b]) => (a < b ? -1 : 1))) lines.push(`${escapeKey(k)}\t${JSON.stringify(v)}`);
   mkdirSync(cache.dir, { recursive: true });
   writeFileSync(path.join(cache.dir, FILE_NAME), `${lines.join('\n')}\n`);
 }

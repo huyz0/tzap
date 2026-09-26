@@ -16,7 +16,7 @@ import path from 'node:path';
 import type { MutantDescriptor, MutantResult } from '@tzap/model';
 import { normPath, type RunnerSession, type RunResult, type Try } from '@tzap/protocol';
 import { relativeTo } from '../files.js';
-import { addTo, decidedCount, limitsFor, speedClass, type EngineRun, type IsolatedMutant, type TestRecord } from './run.js';
+import { addTo, closeAll, decidedCount, limitsFor, speedClass, type EngineRun, type IsolatedMutant, type TestRecord } from './run.js';
 
 interface Item {
   d: MutantDescriptor;
@@ -292,10 +292,12 @@ async function runJobs(run: EngineRun, jobs: Job[], fresh: boolean, runJob: (job
   const workersPerSession = Math.max(1, Math.floor(cores / lanes));
   const pkgById = new Map(run.runnerPackages.map((p) => [p.id, p]));
   const queue = jobs.slice();
+  /** A lane that failed stops the others taking jobs: the analysis is over. */
+  let failed = false;
   const lane = async (laneIndex: number) => {
     const sessions = new Map<string, RunnerSession>();
     try {
-      for (let job = queue.shift(); job; job = queue.shift()) {
+      for (let job = queue.shift(); job && !failed; job = queue.shift()) {
         const { pkgId } = job;
         const pkg = pkgById.get(pkgId)!;
         // The first lane reuses the warm session when that already isolates files.
@@ -305,8 +307,9 @@ async function runJobs(run: EngineRun, jobs: Job[], fresh: boolean, runJob: (job
           let s = pool.get(pkgId);
           if (!s) {
             s = reuseWarm ? run.sessionFor(pkg) : run.sessionFor(pkg, true, workersPerSession);
-            await s.start();
+            // Registered before it starts, so a start that fails after forking is still closed.
             pool.set(pkgId, s);
+            await s.start();
           }
           return s;
         };
@@ -321,15 +324,21 @@ async function runJobs(run: EngineRun, jobs: Job[], fresh: boolean, runJob: (job
           process.stderr.write(`tzap debug: lane ${laneIndex} job ${summary} files=${job.assign.size} ${Math.round(performance.now() - tj)} ms\n`);
         }
         if (fresh) {
-          await Promise.all([...sessions.values()].map((s) => s.close()));
+          await closeAll(sessions.values());
           sessions.clear();
         }
       }
+    } catch (e) {
+      failed = true;
+      throw e;
     } finally {
-      await Promise.all([...sessions.values()].map((s) => s.close()));
+      await closeAll(sessions.values());
     }
   };
-  await Promise.all(Array.from({ length: lanes }, (_, i) => lane(i)));
+  // Every lane finishes (and closes its sessions) before the first failure is reported.
+  const outcomes = await Promise.allSettled(Array.from({ length: lanes }, (_, i) => lane(i)));
+  const rejected = outcomes.find((o) => o.status === 'rejected');
+  if (rejected) throw rejected.reason;
 }
 
 function verdict(it: Item): MutantResult {

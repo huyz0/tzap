@@ -236,8 +236,9 @@ or a unified diff with no repository. Mutant selection is by span overlap with a
 lines; a pure deletion marks the following line.
 
 The part Stryker lacks: **the coverage phase is narrowed too.** Candidate tests are those whose
-static import closure reaches a changed file (an over-approximation: dynamic `import()` with a
-computed specifier or `require` of a variable widens to all tests in the package). A differential
+static import closure reaches a changed file, following tsconfig `paths` (an over-approximation:
+dynamic `import()` with a computed specifier, `require` of a variable, or a bare specifier nothing
+resolves — a bundler alias — widens to all tests in the package). A differential
 test runs the narrowed and the un-narrowed coverage and asserts identical verdicts for in-scope
 mutants.
 
@@ -257,7 +258,8 @@ Opt-in (`--cache-dir`), plain text in sorted sections so a diff of it is readabl
   the dependency, compiler and runner config files (manifests, lockfiles, tsconfig, runner
   configs), which change how every test runs without changing any import closure.
 - `Timeout` from the wall-clock backstop and `RuntimeError` are never reused.
-- **Nothing changed at all** (every source, test and config file fingerprinted): every verdict is
+- **Nothing changed at all** (every file under the package roots fingerprinted, fixtures and
+  data included): every verdict is
   reused and no test runs. Otherwise the coverage run happens, since reuse is decided on it.
 
 ## Where the core is allowed to be opinionated

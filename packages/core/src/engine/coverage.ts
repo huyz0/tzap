@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { MutantDescriptor, PackageModel } from '@tzap/model';
 import { normPath, type RunnerSession, type RunResult } from '@tzap/protocol';
-import { relativeTo, toPosix } from '../files.js';
+import { relativeTo } from '../files.js';
 import type { ImportGraph } from '../graph.js';
 import { addTo, type EngineRun, type TestRecord } from './run.js';
 
@@ -33,10 +33,10 @@ export async function coveragePhase(input: CoverageInput): Promise<CoverageFacts
   const { run, graph, placed } = input;
   const { emit, root, options } = run;
   // A diff run's coverage phase runs only the test files that can reach a file with mutants.
-  const mutatedFiles = new Set(placed.map((d) => toPosix(path.resolve(root, d.file)).toLowerCase()));
+  const mutatedFiles = new Set(placed.map((d) => normPath(path.resolve(root, d.file))));
   const reachesMutated = (testFile: string) => {
     const c = graph.closure(testFile);
-    return c.dynamic || c.files.some((f) => mutatedFiles.has(toPosix(f).toLowerCase()));
+    return c.dynamic || c.files.some((f) => mutatedFiles.has(normPath(f)));
   };
   const facts: CoverageFacts = {
     tests: new Map(),
@@ -53,9 +53,10 @@ export async function coveragePhase(input: CoverageInput): Promise<CoverageFacts
   };
 
   for (const pkg of run.runnerPackages) {
+    // Registered before it starts, so a start that fails after forking is still closed.
     let s = run.sessionFor(pkg);
-    let info = await s.start();
     run.warm.set(pkg.id, s);
+    let info = await s.start();
     let files: string[] | undefined;
     if (options.lines && s.listFiles) {
       const all = await s.listFiles();
@@ -79,8 +80,8 @@ export async function coveragePhase(input: CoverageInput): Promise<CoverageFacts
       input.ownPool.add(pkg.id);
       emit({ type: 'info', message: `${pkg.id}: the baseline is not clean in worker threads; using the project's own pool` });
       s = run.sessionFor(pkg);
-      info = await s.start();
       run.warm.set(pkg.id, s);
+      info = await s.start();
       res = await coverage(s);
     }
     if (!res) throw new Error(`${pkg.id}: the coverage run did not complete`);
@@ -197,7 +198,8 @@ function warnBuiltOutput({ run, graph, placed, packages }: CoverageInput, facts:
   for (const t of facts.green) for (const p of graph.closure(path.resolve(root, t.file)).packages) imported.add(p);
   for (const pkg of packages) {
     if (!imported.has(pkg.id)) continue;
-    const own = placed.filter((d) => d.file.startsWith(`${relativeTo(root, path.resolve(root, pkg.root))}/`));
+    const dir = relativeTo(root, path.resolve(root, pkg.root));
+    const own = placed.filter((d) => dir === '' || d.file.startsWith(`${dir}/`));
     if (own.length > 0 && !own.some((d) => reachedFiles.has(d.file))) {
       run.emit({
         type: 'warning',

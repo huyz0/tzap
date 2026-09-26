@@ -6,10 +6,13 @@
  * coverage phase (only tests that can reach a changed file are run).
  *
  * A computed specifier (`import(name)`, `require(x)`) makes the reach of that file unknowable,
- * and is reported so callers can widen to everything.
+ * and is reported so callers can widen to everything. So does a bare specifier that is neither a
+ * Node built-in, an installed package, a workspace package nor a tsconfig path: a bundler alias or
+ * a virtual module, which could lead anywhere.
  */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { builtinModules } from 'node:module';
 import path from 'node:path';
 import { parseSync } from 'oxc-parser';
 
@@ -23,7 +26,7 @@ export interface FileNode {
   imports: string[];
   /** Workspace package names imported by bare specifier. */
   packages: string[];
-  /** A computed import or require makes this file's reach unknowable. */
+  /** A computed import or require, or an import nothing resolves, makes this file's reach unknowable. */
   dynamic: boolean;
   /** The module may keep mutable state between calls: see `mayHoldState`. */
   stateful: boolean;
@@ -48,6 +51,8 @@ export interface GraphOptions {
   /** tsconfig `paths` as absolute-target patterns, e.g. `@/*` -> [`/repo/src/*`]. */
   paths?: ReadonlyMap<string, string[]>;
 }
+
+const BUILTINS = new Set(builtinModules);
 
 function isFile(p: string): boolean {
   try {
@@ -266,15 +271,18 @@ export class ImportGraph {
           continue;
         }
         const aliased = this.alias(spec);
-        if (aliased) {
-          imports.push(aliased);
+        if (aliased.length > 0) {
+          imports.push(...aliased);
           continue;
         }
+        if (BUILTINS.has(spec) || spec.startsWith('node:')) continue;
         const pkgName = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]!;
         const dir = this.workspaceDir(pkgName, key);
         if (dir !== undefined) {
           this.packageDirs.set(pkgName, dir);
           packages.push(pkgName);
+        } else if (!this.installed(pkgName, key)) {
+          dynamic = true;
         }
       }
     }
@@ -283,7 +291,12 @@ export class ImportGraph {
     return n;
   }
 
-  private alias(spec: string): string | undefined {
+  /**
+   * The files a tsconfig path alias can name: the first target that exists for each matching
+   * pattern. Several packages' tsconfigs can map one pattern differently, so every match counts.
+   */
+  private alias(spec: string): string[] {
+    const out: string[] = [];
     for (const [pattern, targets] of this.options.paths ?? []) {
       const star = pattern.indexOf('*');
       const match =
@@ -292,10 +305,29 @@ export class ImportGraph {
       for (const t of targets) {
         const candidate = t.replace('*', match);
         const r = resolveLocal(path.join(path.dirname(candidate), '__x__'), `./${path.basename(candidate)}`);
-        if (r) return r;
+        if (r) {
+          out.push(r);
+          break;
+        }
       }
     }
-    return undefined;
+    return out;
+  }
+
+  private readonly installedAt = new Map<string, boolean>();
+
+  /** Whether `name` is in a `node_modules` directory at or above the importing file. */
+  private installed(name: string, from: string): boolean {
+    for (let d = path.dirname(from); ; d = path.dirname(d)) {
+      const key = `${d}\0${name}`;
+      let found = this.installedAt.get(key);
+      if (found === undefined) {
+        found = existsSync(path.join(d, 'node_modules', name));
+        this.installedAt.set(key, found);
+      }
+      if (found) return true;
+      if (d === path.dirname(d)) return false;
+    }
   }
 
   /**

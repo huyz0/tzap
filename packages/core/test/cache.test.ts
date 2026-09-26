@@ -125,6 +125,17 @@ describe('the cache', () => {
     expect(edited.lookupUnchanged).toBeUndefined();
   });
 
+  it('counts a fixture a test reads as a change, and not the cache file itself', () => {
+    const { root, model, dir } = setup();
+    mkdirSync(path.join(root, 'test/data'), { recursive: true });
+    writeFileSync(path.join(root, 'test/data/case.yaml'), 'n: 1\n');
+    saveCache(loadCache(dir, model, settings), result([{ ...mutant('m'), status: 'Survived', coveredBy: ['p::t1'] }]));
+    // The cache directory sits inside the package root: writing it changes nothing.
+    expect(loadCache(dir, model, settings).unchanged).toBe(true);
+    writeFileSync(path.join(root, 'test/data/case.yaml'), 'n: 2\n');
+    expect(loadCache(dir, model, settings).unchanged).toBe(false);
+  });
+
   it('is rewritten whole by a full run, and updated in part by a diff run', () => {
     const { model, dir } = setup();
     saveCache(loadCache(dir, model, settings), result([{ ...mutant('gone'), status: 'Survived' }, { ...mutant('kept'), status: 'Survived' }]));
@@ -163,6 +174,17 @@ describe('the cache', () => {
       expect(c.entries.size, file).toBe(0);
       expect(c.note).toMatch(/different toolchain \(config\)/);
     }
+  });
+
+  it('keeps a test whose name holds a tab, a newline or a backslash', () => {
+    const { model, dir } = setup();
+    const odd = 'p::a\tb\nc\\d\\n';
+    const tests = [{ id: odd, name: 'a\tb\nc', file: 'test/a.test.ts', closure: 'c1' }];
+    saveCache(loadCache(dir, model, settings), result([{ ...mutant('m'), status: 'Killed', killedBy: [odd], coveredBy: [odd] }], { tests }));
+    const c = loadCache(dir, model, settings);
+    expect(c.note).toBeUndefined();
+    expect([...c.tests.keys()]).toEqual([odd]);
+    expect(c.reuse(mutant('m'), coverage([odd], { [odd]: 'c1' }))?.status).toBe('Killed');
   });
 
   it('ignores a damaged file entirely, not just from the damage on', () => {

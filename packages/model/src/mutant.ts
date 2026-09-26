@@ -46,17 +46,18 @@ export interface MutantDescriptor {
   runs?: string;
   /** Original source text at `location`. */
   original: string;
+  /** What the mutant does, in words; for an ignored mutant, why it was dropped. */
   description?: string;
   /** Instrumentation site whose coverage counter decides whether this mutant is reached. */
   site: number;
-  /** Set when the mutant was dropped before running, with the reason in `statusReason`. */
+  /** Set when the mutant was dropped before running: the rule that dropped it (its reason is in `description`). */
   ignoredBy?: string;
 }
 
 export interface MutantResult extends MutantDescriptor {
   status: MutantStatus;
   statusReason?: string;
-  /** Reached only while a module evaluated, never inside a test. */
+  /** Reached while a module evaluated (tests may reach it too): decided with the mutant active from before any module loads. */
   static?: boolean;
   killedBy?: string[];
   coveredBy?: string[];

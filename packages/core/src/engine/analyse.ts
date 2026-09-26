@@ -10,10 +10,11 @@ import { instrument } from '@tzap/instrument';
 import type { RunnerSession } from '@tzap/protocol';
 import { relativeTo, sourceFiles } from '../files.js';
 import { ImportGraph, realPath } from '../graph.js';
+import { tsconfigPaths } from '../tsconfig.js';
 import { coveragePhase, type CoverageFacts } from './coverage.js';
 import { isolatedRuns } from './isolated.js';
 import type { EngineOptions } from './options.js';
-import { decidedCount, speedClass, Timer, type EngineRun, type Pending } from './run.js';
+import { closeAll, decidedCount, speedClass, Timer, type EngineRun, type Pending } from './run.js';
 import { warmEngine } from './warm.js';
 
 export async function analyse(model: ProjectModel, options: EngineOptions): Promise<AnalysisResult> {
@@ -50,8 +51,13 @@ function inventory(model: ProjectModel, options: EngineOptions, root: string, tm
   let nextMutant = 0;
   let nextSite = 0;
   let fileCount = 0;
+  // Packages whose source globs overlap (a root package over the whole tree, say) share files:
+  // each is instrumented once.
+  const seen = new Set<string>();
   for (const pkg of model.packages) {
     for (const abs of sourceFiles(root, pkg)) {
+      if (seen.has(path.resolve(abs))) continue;
+      seen.add(path.resolve(abs));
       const rel = relativeTo(root, abs);
       const lines = options.lines ? options.lines.get(rel) : undefined;
       if (options.lines && !lines) continue;
@@ -91,15 +97,6 @@ async function analyseIn(model: ProjectModel, options: EngineOptions, tmpDir: st
   const results = new Map<number, MutantResult>();
   const typecheck = options.typecheck;
 
-  // --typecheck=all: type-invalid mutants never run.
-  if (typecheck?.mode === 'all') {
-    phase('typecheck');
-    const rejected = await typecheck.check(placed, root);
-    for (const d of placed) {
-      const diag = rejected.get(d.num);
-      if (diag !== undefined) results.set(d.num, { ...d, status: 'CompileError', statusReason: diag });
-    }
-  }
   // A mutant a type rule dropped is not ignored by choice: the type system rules it out, as the
   // checker would. CompileError, outside the score, with the rule's reason.
   const ignored: MutantResult[] = descriptors
@@ -156,6 +153,16 @@ async function analyseIn(model: ProjectModel, options: EngineOptions, tmpDir: st
       return finish(options.unchanged.tests, options.unchanged.red);
     }
   }
+  // --typecheck=all: type-invalid mutants never run. After the shortcut above, whose cached
+  // verdicts already include the checker's.
+  if (typecheck?.mode === 'all') {
+    phase('typecheck');
+    const rejected = await typecheck.check(placed, root);
+    for (const d of placed) {
+      const diag = rejected.get(d.num);
+      if (diag !== undefined) results.set(d.num, { ...d, status: 'CompileError', statusReason: diag });
+    }
+  }
   if (placed.length === 0 || runnerPackages.length === 0) {
     for (const d of placed) if (!results.has(d.num)) results.set(d.num, { ...d, status: 'NoCoverage', statusReason: 'no package with a test runner' });
     await typecheckSurvivors();
@@ -179,6 +186,7 @@ async function analyseIn(model: ProjectModel, options: EngineOptions, tmpDir: st
     workspacePackages: new Map(model.packages.map((p) => [p.id, path.resolve(root, p.root)])),
     root,
     filesUnder: (dir) => allSources.filter((s) => s.real.startsWith(dir + path.sep)).map((s) => s.f),
+    paths: tsconfigPaths(model),
   });
   try {
     const facts = await coveragePhase({ run: base, graph, placed, packageFiles, ownPool, packages: model.packages });
@@ -204,7 +212,7 @@ async function analyseIn(model: ProjectModel, options: EngineOptions, tmpDir: st
     await typecheckSurvivors();
     return finish(facts.green, facts.red.map((t) => ({ id: t.key, name: t.name, file: t.file, message: t.red ?? '' })));
   } finally {
-    await Promise.all([...base.warm.values()].map((s) => s.close()));
+    await closeAll(base.warm.values());
   }
 }
 

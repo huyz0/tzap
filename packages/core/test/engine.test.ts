@@ -84,6 +84,33 @@ describe('the warm engine', () => {
     ]);
   });
 
+  it('retries the tries a runner skipped for a kill that did not count', async () => {
+    // Round 2 tries add then sub in b1, and sub in c1. add leaves state behind; sub, tried after
+    // it, fails in b1 because of that state, so the runner skips sub in c1 as already killed. b1's
+    // closing control fails, the kill does not count, and sub must still be tried against c1.
+    const [add, sub] = [at('add').num, at('sub').num];
+    let falseKill = true;
+    const { verdict, log } = await run({
+      tests: [
+        { id: 'a1', file: 'test/a.test.js', hits: [at('add').site, at('sub').site] },
+        { id: 'b1', file: 'test/a.test.js', hits: [at('add').site, at('sub').site] },
+        { id: 'c1', file: 'test/a.test.js', hits: [at('sub').site] },
+      ],
+      corrupts: new Set([add]),
+      outcome: (t, m) => {
+        if (t === 'b1' && m === sub && falseKill) {
+          falseKill = false;
+          return 'K';
+        }
+        return 'S';
+      },
+    });
+    const rounds = log.runs.filter((r) => r.mode === 'mutate').map((r) => r.plan!);
+    expect(rounds[1]!['c1']!.map((t) => t.m)).toEqual([-1, sub, -1]);
+    expect(rounds.slice(2).some((p) => p['c1']?.some((t) => t.m === sub))).toBe(true);
+    expect(verdict('sub')).toMatchObject({ status: 'Survived', coveredBy: ['pkg::a1', 'pkg::b1', 'pkg::c1'] });
+  });
+
   it('decides in isolation what state broken for good keeps from being trusted', async () => {
     // add breaks a1 for the rest of the session: no round behind controls makes progress.
     const { verdict, events } = await run({
@@ -123,6 +150,16 @@ describe('the warm engine', () => {
     expect(result.mutants.find((m) => m.original === 'a + b')!.statusReason).toBe('wall-clock backstop');
     expect(log.sessions.length).toBeGreaterThan(1);
     expect(events).toContainEqual({ type: 'warning', message: `wall-clock backstop: mutants ${at('add').num} declared hung` });
+  });
+
+  it('decides in isolation the mutants of a run that stalls with no mutant try in flight', async () => {
+    const { result, events } = await run({
+      tests: [{ id: 'a1', file: 'test/a.test.js', hits: [at('add').site, at('sub').site] }],
+      stallsControl: new Set([at('add').num]),
+      outcome: (_t, m, mode) => (m === at('add').num && mode === 'static' ? 'K' : 'S'),
+    });
+    expect(statuses(result)).toMatchObject({ 'a + b': 'Killed', 'a - b': 'Survived' });
+    expect(events.some((e) => e.type === 'warning' && /went silent .* no mutant try in flight; its 2 remaining mutants are decided in isolation/.test(e.message))).toBe(true);
   });
 
   it('decides in isolation the mutants of a round an unhandled error failed', async () => {
@@ -228,6 +265,17 @@ describe('the reference engine', () => {
     expect(statuses(reference.result)).toEqual(statuses(warm.result));
     expect(reference.result.config.engine).toBe('reference');
     expect(reference.log.sessions.filter((s) => s.isolate).length).toBe(3);
+  });
+});
+
+describe('packages whose sources overlap', () => {
+  it('instrument and report each file once', async () => {
+    const { factory } = fakeRunner({ tests: [{ id: 'a1', file: 'test/a.test.js', hits: [at('add').site] }], outcome: () => 'K' });
+    const m = model();
+    m.packages.push({ id: 'again', root: '.', sources: ['src/math.js'], tests: [] });
+    const result = await analyse(m, { runners: { vitest: factory }, mutators: MUTATORS, tzapVersion: 'test', verifySurvivors: false });
+    expect(result.mutants.map((x) => x.original)).toEqual(['a + b', 'a - b', 'a * b', 'a / b']);
+    expect(result.mutants.find((x) => x.original === 'a + b')!.status).toBe('Killed');
   });
 });
 
