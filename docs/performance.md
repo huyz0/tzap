@@ -110,13 +110,47 @@ Vitest package. The Jest runner and the frontend fixtures exist; the benchmark v
 | Scenario | Required | Measured | Verdict |
 |---|---|---:|---|
 | S1 full run | ≥ 3x | 7.1x | **met** |
-| S3 10-line diff | ≥ 10x | 4.5x | **not met** |
+| S3 10-line diff | ≥ 10x | 4.5x (fixture), 2.6x (remeda) | **not met** |
 
 S3's criterion assumed a suite whose dry run is expensive — the cost StrykerJS pays for every
-diff and tzap narrows away. On this fixture StrykerJS's whole dry run takes 0.4 s, so there is
+diff and tzap narrows away. On the fixture StrykerJS's whole dry run takes 0.4 s, so there is
 little to narrow away, and tzap's fixed floor (a runner boot and a coverage pass of the tests
-that can reach the change) dominates. The criterion is recorded as unmet; a diff benchmark on a
-corpus project with a real suite is the measurement that would settle it.
+that can reach the change) dominates. So S3 was also measured on a real suite, below; it is not
+met there either.
+
+### S3 on a real suite: remeda
+
+`tools/bench/s3-corpus.mjs`: the same patch derivation as `bench.mjs` (two files by a fixed
+stride, five mutant-bearing lines in each), on remeda from the parity corpus with its whole
+runtime suite: 174 test files, 2,226 tests, 15.5 s under `vitest run`. Vitest 4.1.11, StrykerJS
+10.0.0 at concurrency 4 (faster than 2, one probe run each), `isolate: true` for both (StrykerJS
+needs it), type checking off for both; tzap 3 runs, StrykerJS 3, interleaved. Linux container,
+4 vCPU Xeon 2.1 GHz, Node 22.22, build `c3c2ca9`. Raw data:
+[tools/bench/results/s3-remeda-linux.json](../tools/bench/results/s3-remeda-linux.json), the
+patch: [S3-remeda.patch](../tools/bench/results/S3-remeda.patch).
+
+| | Median (min–max) | Phases (last run) | Mutants |
+|---|---:|---|---|
+| tzap `--patch` | 18.02 s (17.96–18.90) | coverage 7.8 s, warm 5.1 s, isolated 4.8 s | 22: 17 Killed, 5 Timeout |
+| StrykerJS `--mutate` ranges | 47.31 s (46.60–47.35) | startup 3.2 s, dry run 12.5 s, mutants 30.9 s | 16: 14 Killed, 2 Timeout |
+| **Ratio** | **2.6x** | | 16 shared; 1 Timeout/Killed disagreement |
+
+What it shows:
+
+- **The stride picked a hub.** One of the two files is `src/internal/purryFromLazy.ts`, which
+  about 70 of remeda's functions go through: the change reaches 572 of the 2,226 tests, so the
+  narrowed coverage pass (each of those tests run twice) saves little over StrykerJS's full dry
+  run. Hub files are edited in real PRs too, and the patch was not re-drawn.
+- **Five of its mutants are static** (reached while modules load, since remeda builds functions
+  at the top level), decided in isolated runs: the 4.8 s isolated phase.
+- **tzap did more work.** Its 6 extra mutants are block bodies that start on a changed line and
+  end past it; StrykerJS's line ranges drop any mutant not wholly inside them. Two of the six are
+  loops that hang (`while (true)` with its body removed), which is where tzap's extra Timeouts
+  come from. On the shared 16 alone the ratio would be higher; it is not quoted, because the
+  timing covers all 22.
+- **What would move it:** the coverage pass (it runs every reaching test twice, to find tests
+  that depend on leftover state) and static mutants under `isolate: true`. A diff that avoids
+  hub files narrows far more; this one is what the fixed derivation produced.
 
 ## What building it taught about speed
 
@@ -139,5 +173,7 @@ corpus project with a real suite is the measurement that would settle it.
 pnpm build
 node tools/bench/generate.mjs --check      # the fixture is what the seed produces
 node tools/bench/bench.mjs                 # all scenarios; --only S1,S3 --runs 5 to narrow
+(cd tools/parity && npm ci && node fetch.mjs remeda)
+node tools/bench/s3-corpus.mjs             # S3 on remeda's real suite
 node tools/bench/render.mjs                # tools/bench/report.md
 ```

@@ -101,11 +101,13 @@ better read as 6–7x.
 
 - **S1 ≥ 3x: met** (7.1x at identical inventory: 1,495 shared mutants, none unique to either
   tool; 6.3x against the previous report's StrykerJS time).
-- **S3 ≥ 10x: not met** (4.5x). On this fixture StrykerJS's full dry run costs 0.4 s, because
-  its 200 tests take milliseconds; the cost the criterion targets barely exists, and tzap's own
-  fixed floor (a runner boot and a coverage pass) dominates. The criterion assumed a suite whose
-  dry run is expensive. It stays recorded as failed on the evidence available; a diff run on a
-  corpus project with a real suite is the measurement that would settle it.
+- **S3 ≥ 10x: not met**, on either suite. On the fixture (4.5x) StrykerJS's full dry run costs
+  0.4 s, because its 200 tests take milliseconds: the cost the criterion targets barely exists,
+  and tzap's fixed floor (a runner boot and a coverage pass) dominates. On remeda's real suite
+  (2,226 tests, 15.5 s) it is 2.6x — 18.0 s against 47.3 s — where the derived patch hit an
+  internal helper most of the library goes through, so the change reaches 572 tests and narrowing
+  saves little ([performance.md](performance.md#s3-on-a-real-suite-remeda)). The largest costs
+  left are the coverage pass running each reaching test twice and static mutants.
 
 ## Measured and deliberately not built
 
@@ -127,7 +129,7 @@ better read as 6–7x.
 
 ## Known limitations
 
-- **S3's criterion is unmet** on the benchmark fixture (above).
+- **S3's criterion is unmet** on the benchmark fixture and on remeda's real suite (above).
 - **Type-invalid mutants the tests killed** still count as detected under `--typecheck survivors`
   (the default); `--typecheck all` removes that bias at the cost of checking every mutant.
 - **`--verify-survivors auto` assumes third-party packages hold no state a project mutant
@@ -147,4 +149,5 @@ node scripts/check-boundaries.mjs             # the package graph against the im
 node scripts/pack-smoke.mjs                   # the published package, from its tarball
 cd tools/parity && node compare.mjs           # the StrykerJS comparison (after run.mjs)
 node tools/bench/bench.mjs                    # the benchmark scenarios
+node tools/bench/s3-corpus.mjs                # S3 on remeda (after tools/parity fetch.mjs remeda)
 ```
