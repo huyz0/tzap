@@ -120,7 +120,7 @@ better read as 6–7x.
 | Missing | Where it belongs |
 |---|---|
 | Publishing to npm — the bundle and tarball are verified, but publishing needs the owner's npm account | M24 |
-| CI runs — the workflow is written; the repository has no remote yet | M0 |
+| tzap's own pull-request job (mutation testing of the diff) — the workflow has it, but it runs only on pull requests and none has been opened | M0 |
 | A 30-day dogfood on external projects (tzap has been run on itself and on three libraries) | M24 |
 | Jest 29, Vitest browser mode, Angular templates, Astro, Karma | M17, M19 |
 | node:test: a test file's top-level `before`/`after` run once per run, not once per file (isolation none) | M16 |

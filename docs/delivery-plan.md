@@ -50,7 +50,7 @@ building; what building it changed is recorded at the end rather than edited in.
 
 | Milestone | Status |
 |---|---|
-| M0 Skeleton & CI | **Done**, CI unrun: workspace, boundary check against imports, zero-import runtime, pack-and-install smoke test; the CI workflow is written but the repository has no remote yet |
+| M0 Skeleton & CI | **Done**: workspace, boundary check against imports, zero-import runtime, pack-and-install smoke test; CI green on Ubuntu, macOS and Windows × Node 22, 24, 26 (github.com/huyz0/tzap); the pull-request mutation job has not run yet |
 | M1 Risk spikes | **Done**: [A](spikes/A-vitest-rerun.md) Vitest (found the `repeats` path, ~56 µs/try), [B](spikes/B-jest-warm.md) Jest (jest-circus retry loop), C transparency (a sweep of 696,278 mutants over 2,536 files, all parsing), D static mutants (packed per-file runs), E TypeScript 7 (unstable API, 5 ms/mutant grouped) |
 | M2 Model, discovery, CLI | **Done**: schema v1, validation with field-level messages, pnpm/npm/yarn workspaces, root `test.projects`, `--dry-run` |
 | M3 Inventory | **Done**: Stryker's seventeen mutators under Stryker's names, disable comments, stable ids, hand-written expectations |
