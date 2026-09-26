@@ -21,6 +21,9 @@
  *   its own in a long-lived process (it waits for `beforeExit`), so the executor calls the
  *   run's own teardown once the sentinel has reported, which also removes the process listeners
  *   and async hook the run installed.
+ * - Every file's tests share that one root, so a test file's own top-level hooks are scoped back
+ *   to it: `beforeEach`/`afterEach` skip other files' tests, and `before`/`after` run around the
+ *   file's own tests rather than around the whole run.
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { globSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -62,6 +65,7 @@ interface NodeTest extends Register {
   test: Register;
   describe: Register;
   before: (fn: Fn, options?: object) => void;
+  after: (fn: Fn, options?: object) => void;
   beforeEach: (fn: Fn, options?: object) => void;
   afterEach: (fn: Fn, options?: object) => void;
   run: (options: object) => NodeJS.ReadableStream & { on(ev: string, f: (e: unknown) => void): unknown; resume(): unknown };
@@ -130,6 +134,14 @@ function callerFile(): string | undefined {
 }
 
 const SKIP = 'tzap: skipped, mutant already killed in this run';
+
+/** Calls a `before`/`after` hook as node:test would: a second parameter is a `done` callback. */
+function callHook(fn: Fn, t: Ctx): Promise<unknown> {
+  if (fn.length < 2) return Promise.resolve().then(() => fn.call(t, t));
+  return new Promise((resolve, reject) => {
+    fn.call(t, t, (err?: unknown) => (err ? reject(err) : resolve(undefined)));
+  });
+}
 export const DEFAULT_TEST_TIMEOUT = 5000;
 
 interface TestInfo {
@@ -176,6 +188,12 @@ interface RunState {
   killed: Set<number>;
   outside: Map<number, number>;
   fileErrors: Map<string, string>;
+  /** A test file's own top-level `before`/`after` hooks, by normalised path. */
+  fileHooks: Map<string, { before: Fn[]; after: Fn[] }>;
+  /** The file whose `before` hooks ran last and whose `after` hooks are still due. */
+  openFile: string | undefined;
+  /** The error a `before` hook of the open file threw: each of its tests fails with it. */
+  beforeError: unknown;
   sentinelName: string;
 }
 
@@ -369,7 +387,38 @@ export class Executor {
     api.suite = describe;
     api.beforeEach = this.scopedHook(real.beforeEach);
     api.afterEach = this.scopedHook(real.afterEach);
+    api.before = this.fileHook('before', real.before);
+    api.after = this.fileHook('after', real.after);
     return api;
+  }
+
+  /**
+   * The test file registering a hook for itself, at its top level: the one case where isolation
+   * 'none' differs from `node --test`, which runs each file in its own process.
+   */
+  private ownHookTarget(fn: unknown): string | undefined {
+    const st = this.state;
+    if (!st || st.phase !== 'register' || this.als.getStore() !== undefined || typeof fn !== 'function' || !st.currentFile) return undefined;
+    const target = norm(st.currentFile);
+    return callerFile() === target ? target : undefined;
+  }
+
+  /**
+   * A test file's top-level `before`/`after` would land on the one root shared by every file, so
+   * every file's `before` would run ahead of the first test of the run and every `after` behind
+   * the last. `node --test` runs them around that file's own tests; so does the executor, from the
+   * prelude's `beforeEach`: a file's `before` hooks as its first test starts, its `after` hooks as
+   * the next file's first test starts, or as the run ends.
+   */
+  private fileHook(kind: 'before' | 'after', realHook: (fn: Fn, options?: object) => void): (fn: unknown, options?: object) => void {
+    return (fn, options) => {
+      const target = this.ownHookTarget(fn);
+      if (target === undefined) return realHook(fn as Fn, options);
+      const st = this.state!;
+      let hooks = st.fileHooks.get(target);
+      if (!hooks) st.fileHooks.set(target, (hooks = { before: [], after: [] }));
+      hooks[kind].push(fn as Fn);
+    };
   }
 
   /**
@@ -381,12 +430,8 @@ export class Executor {
    */
   private scopedHook(realHook: (fn: Fn, options?: object) => void): (fn: unknown, options?: object) => void {
     return (fn, options) => {
-      const st = this.state;
-      if (!st || st.phase !== 'register' || this.als.getStore() !== undefined || typeof fn !== 'function' || !st.currentFile) {
-        return realHook(fn as Fn, options);
-      }
-      const target = norm(st.currentFile);
-      if (callerFile() !== target) return realHook(fn as Fn, options);
+      const target = this.ownHookTarget(fn);
+      if (target === undefined) return realHook(fn as Fn, options);
       const user = fn as Fn;
       const scoped = function (this: unknown, ...args: unknown[]) {
         const t = args[0] as Ctx | undefined;
@@ -502,9 +547,48 @@ export class Executor {
     for (const [site, n] of hits) st.outside.set(site, (st.outside.get(site) ?? 0) + n);
   }
 
-  private beforeTest(t: Ctx): void {
+  private beforeTest(t: Ctx): void | Promise<void> {
     const st = this.state;
     if (!st) return;
+    const file = norm(t.filePath ?? '');
+    if (file !== st.openFile && (st.openFile !== undefined || st.fileHooks.has(file))) {
+      return this.switchFile(st, file, t).then(() => this.startTry(st, t));
+    }
+    this.startTry(st, t);
+  }
+
+  /** Runs the open file's `after` hooks, then the next file's `before` hooks, outside any try. */
+  private async switchFile(st: RunState, file: string | undefined, t: Ctx): Promise<void> {
+    this.finishPending();
+    const closing = st.openFile;
+    st.openFile = file;
+    st.beforeError = undefined;
+    if (closing !== undefined) {
+      for (const fn of st.fileHooks.get(closing)?.after ?? []) {
+        try {
+          await callHook(fn, t);
+        } catch (err) {
+          // node --test fails the file, whatever its tests did.
+          if (!st.fileErrors.has(closing)) st.fileErrors.set(closing, `after hook failed: ${firstMessage(err) ?? 'failed'}`);
+        }
+      }
+    }
+    if (file !== undefined) {
+      for (const fn of st.fileHooks.get(file)?.before ?? []) {
+        try {
+          await callHook(fn, t);
+        } catch (err) {
+          // node --test fails every test of the file with it, and runs no further before hooks.
+          st.beforeError = err;
+          break;
+        }
+      }
+    }
+    // Hits from file hooks belong to no test: in a fresh process they are part of loading the file.
+    this.collectOutside();
+  }
+
+  private startTry(st: RunState, t: Ctx): void {
     // Root hooks are inherited by subtests (t.test) too: those belong to the running try.
     const key = `${norm(t.filePath ?? '')}\0${t.fullName}`;
     const copy = st.queues.get(key)?.shift();
@@ -517,6 +601,7 @@ export class Executor {
       this.collectOutside();
       endTry(this.rt);
       copy.started = performance.now();
+      if (st.beforeError !== undefined) throw st.beforeError;
       return;
     }
     const tr = copy.info.tries![copy.index]!;
@@ -530,6 +615,7 @@ export class Executor {
     this.o.onProgress?.(st.req.id, copy.info.id, tr.m, false);
     beginTry(this.rt, st.mode === 'static' ? st.staticMutant : tr.m, tr.N, tr.L);
     copy.started = performance.now();
+    if (st.beforeError !== undefined) throw st.beforeError;
   }
 
   private afterTest(t: Ctx): void {
@@ -619,6 +705,9 @@ export class Executor {
       killed: new Set(),
       outside: new Map(),
       fileErrors: new Map(),
+      fileHooks: new Map(),
+      openFile: undefined,
+      beforeError: undefined,
       sentinelName: `tzap:end:${n}`,
     };
     if (files.length === 0) return { id: req.id, tests: [], files: [], durationMs: performance.now() - started };

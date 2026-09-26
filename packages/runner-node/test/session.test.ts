@@ -11,6 +11,7 @@ const here = import.meta.dirname;
 const repo = path.resolve(here, '../../..');
 const sample = path.join(repo, 'fixtures/sample-node');
 const hazards = path.join(here, '../fixtures/hazards');
+const fileHooks = path.join(here, '../fixtures/file-hooks');
 
 interface Prepared {
   tmp: string;
@@ -218,6 +219,7 @@ describe('hazards', () => {
   it('identifies duplicates by ordinal, skips skip/todo, keeps subtests inside their test, loads CommonJS', () => {
     expect(coverage.tests.map((t) => [t.id, t.state])).toEqual([
       ['test/legacy.test.cjs::doubles', 'pass'],
+      ['test/lifecycle.test.ts::runs inside its file hooks', 'pass'],
       ['test/loops.test.ts::sums > uses the hook', 'pass'],
       ['test/loops.test.ts::sums > dup', 'pass'],
       ['test/loops.test.ts::sums > dup #2', 'pass'],
@@ -293,5 +295,53 @@ describe('hazards', () => {
       [-1, 'S'],
       [-1, 'S'],
     ]);
+  });
+
+  it("runs a file's top-level before/after around its own tests only, as node --test does", async () => {
+    const own = 'test/lifecycle.test.ts::runs inside its file hooks';
+    // sumTo(2) in a before hook: a hit while the file loads, in a fresh process.
+    const loop = find(p, 'src/loops.ts', 3, 'i--');
+    expect(coverage.files.find((f) => f.file.endsWith('lifecycle.test.ts'))!.staticHits!.map(([x]) => x)).toContain(loop.site);
+    expect(byId(coverage, own).stateSensitive).toBeUndefined();
+    const flip = find(p, 'src/loops.ts', 3, 's -= i');
+    const res = await s.run({
+      id: 4,
+      mode: 'mutate',
+      plan: {
+        'test/legacy.test.cjs::doubles': [control],
+        [own]: [control, tryOf(flip), control],
+        'test/scoped.test.ts::sees its own hooks': [control],
+      },
+    });
+    expect(res.files.filter((f) => f.error)).toEqual([]);
+    expect(res.tests.map((t) => [t.id, t.tries!.map(([m, o]) => [m, o])])).toEqual([
+      ['test/legacy.test.cjs::doubles', [[-1, 'S']]],
+      [own, [[-1, 'S'], [flip.num, 'K'], [-1, 'S']]],
+      ['test/scoped.test.ts::sees its own hooks', [[-1, 'S']]],
+    ]);
+  });
+});
+
+describe('file hooks that throw', () => {
+  it('fail the tests of a file whose before throws, and the file whose after throws', async () => {
+    const p = prepare(fileHooks, []);
+    const s = new NodeTestSession({ root: fileHooks, pkg: pkgOf(fileHooks), instrumented: p.instrumented, tmpDir: p.tmp });
+    await s.start();
+    try {
+      const res = await s.run({ id: 1, mode: 'coverage' });
+      expect(res.tests.map((t) => [t.id, t.state, t.message])).toEqual([
+        ['test/a-before.test.mjs::needs the database', 'fail', 'no database'],
+        ['test/b-after.test.mjs::passes before a broken cleanup', 'pass', undefined],
+        ['test/c-clean.test.mjs::is not touched by the other files', 'pass', undefined],
+      ]);
+      expect(res.files.map((f) => [path.basename(f.file), f.error])).toEqual([
+        ['a-before.test.mjs', undefined],
+        ['b-after.test.mjs', 'after hook failed: cleanup failed'],
+        ['c-clean.test.mjs', undefined],
+      ]);
+    } finally {
+      await s.close();
+      rmSync(p.tmp, { recursive: true, force: true });
+    }
   });
 });

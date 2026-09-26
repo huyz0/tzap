@@ -1,0 +1,6 @@
+{
+  "name": "fixture-runner-node-file-hooks",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test" }
+}

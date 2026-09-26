@@ -15,5 +15,6 @@ afterEach((t, done) => {
 
 test('sees its own hooks', () => {
   assert.ok(seen >= 1);
+  assert.equal((globalThis as { __lifecycle?: string }).__lifecycle, undefined, 'an earlier file\'s after hook has not run');
   assert.equal(sumTo(3), 6);
 });
