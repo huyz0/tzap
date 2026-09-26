@@ -1,11 +1,10 @@
 # StrykerJS parity and benchmark harness
 
 StrykerJS is tzap's correctness oracle and its performance baseline, as PIT was for jzap. The
-harness is built before the engine it judges, and every milestone from M6 onward is gated on it.
+harness is built before the engine it judges, and every engine change is gated on it.
 Nothing about the engine is believed until this harness says so.
 
-Referenced by [delivery-plan.md](delivery-plan.md). Stryker's internals and known oracle hazards
-are in [research/stryker-js.md](research/stryker-js.md).
+Stryker's internals and known oracle hazards are in [research/stryker-js.md](research/stryker-js.md).
 
 ## 1. Why StrykerJS is the oracle, and where it is not trusted
 

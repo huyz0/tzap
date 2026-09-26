@@ -105,7 +105,7 @@ forty packages does not fit on a command line (Windows' limit is 32k characters)
 
 **Multi-package from day one.** The model takes a list, because the ordinary monorepo shape is a
 library package with no tests of its own, killed by tests in an app package. Analysing it package
-at a time reports every mutant uncovered and the score means nothing. jzap learned this at M20;
+at a time reports every mutant uncovered and the score means nothing. jzap learned this the hard way;
 tzap starts there.
 
 ## Instrumentation
@@ -187,7 +187,7 @@ worker.
 
 **Static mutants** — reached only while a module evaluates — cannot be switched in a warm worker,
 because the module already ran. They run in a separate batch, each re-evaluating the affected
-module subgraph in a fresh context (strategy chosen by spike M1-D), running only test files that
+module subgraph in a fresh context (strategy chosen by the static-mutant spike), running only test files that
 import the module, never the whole suite by default.
 
 ## Soundness gates

@@ -1,7 +1,7 @@
 # Spike C: Bun and Deno — and the Mocha adapter's numbers
 
 - **Date:** 2026-09-26
-- **Questions (from M18):** (1) what is the cheapest correct way to run many mutant tries per run
+- **Questions:** (1) what is the cheapest correct way to run many mutant tries per run
   under Mocha, and what does it cost; (2) should tzap support `bun test` and `deno test`, now?
 - **Environment:** Mocha 12.0.2, Node 26.7.0, Windows 11, i5-13600KF. Neither Bun nor Deno is
   installed on this machine, and none was installed for the spike: part 2 is from documentation,

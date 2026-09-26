@@ -115,8 +115,8 @@ tbl(table(['#', 'Scenario', 'tzap', 'StrykerJS', 'Stryker / tzap', 'Mutants tzap
 both('"Executed" counts mutants that ran at least one test in that run (cached or reused results excluded). Stryker / tzap is the ratio of medians; it is printed only with n >= 3 on both sides and non-empty inventories.');
 both('');
 
-// --- kill criteria -----------------------------------------------------------------------------
-heading('Kill criteria (docs/delivery-plan.md)');
+// --- speed targets -----------------------------------------------------------------------------
+heading('Speed targets');
 const kc = [];
 for (const [id, need] of [['S1', 3], ['S3', 10]]) {
   const s = R.scenarios[id];

@@ -175,8 +175,7 @@ so writing tzap in Go would not buy type-check speed; depending on TS 7 does.
 
 ## 8. Decisions this research forces
 
-Each is taken in [architecture.md](../architecture.md) and scheduled in
-[delivery-plan.md](../delivery-plan.md):
+Each is taken in [architecture.md](../architecture.md):
 
 1. **tzap owns the execution loop.** Only an owned loop gets schemata, per-test coverage, ordering
    and uniform early exit. The cost is tracking runner internals; the mitigation is a narrow
@@ -199,7 +198,8 @@ Each is taken in [architecture.md](../architecture.md) and scheduled in
 
 ## 9. Open questions the first spikes must answer
 
-These are unmeasured and each can change the architecture; they are M1 in the delivery plan.
+Each could change the architecture, so each was measured before the engine was built; the
+answers are in [spikes/](../spikes/) and [status.md](../status.md).
 
 1. **Vitest warm re-run cost** for one test id with `isolate:false` in a warm worker. If above
    ~5 ms, drive `@vitest/runner` directly inside tzap's own worker instead of hosting Vitest.

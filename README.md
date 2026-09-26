@@ -12,7 +12,7 @@ StrykerJS as the correctness oracle, every speed feature checked against a slow 
 engine, every number reproducible. See [docs/status.md](docs/status.md) for exactly what exists.
 
 ```bash
-npm install --save-dev tzap
+npm install --save-dev tzap                   # not on npm yet: see docs/usage.md#install
 npx tzap run                                  # the whole package
 npx tzap run --from origin/main --to -Local-  # only the lines this branch changed
 ```
@@ -87,7 +87,7 @@ npx tzap run -r html -o reports   # the standard mutation-testing viewer
 - [docs/performance.md](docs/performance.md) — every published number and how it was taken
 - [docs/troubleshooting.md](docs/troubleshooting.md) — the failures people hit
 - [docs/compatibility.md](docs/compatibility.md) — runners, Node, frameworks, as tested
-- [docs/architecture.md](docs/architecture.md), [docs/delivery-plan.md](docs/delivery-plan.md), [docs/research/](docs/research/README.md) — how it was designed, and why
+- [docs/architecture.md](docs/architecture.md), [docs/research/](docs/research/README.md) — how it was designed, and why
 
 ## Developing
 

@@ -365,7 +365,7 @@ The transformer benchmarks put oxc about 4× faster than swc and **about 40× fa
 > (parse + schemata instrument + source map), oxc-parser with raw transfer plus magic-string is
 > 2–5x faster than a Stryker-shaped Babel pipeline (cal.com.tsx: 81 ms vs 389 ms). Both notes agree
 > that tzap's own CPU work is ≤2% of a PR-sized run, so this decides the parser, not the engine
-> language. The Rust-native instrumenter is kept as a gated option (delivery plan M22), not the
+> language. The Rust-native instrumenter is kept as a gated option (built only if tzap's own CPU work becomes a real share of a run), not the
 > default. See [ADR 0001](../adr/0001-implementation-language.md).
 
 **Schemata vs re-transform per mutant.** Re-transforming a file per mutant costs parse, transform and load, several ms per file even with oxc, and it forces a module reload. With schemata, each file is transformed once (at 40× Babel speed with oxc), and all of its mutants are then activated at runtime for free (§3.2: 1.00× when inactive). This is also Stryker's design. Stryker uses Babel, and moved to Babel 8 in 10.0 ([release](https://github.com/stryker-mutator/stryker-js/releases/tag/v10.0.0)).

@@ -105,7 +105,7 @@ Vitest package. The Jest runner and the frontend fixtures exist; the benchmark v
   the edited file whose tests import it; StrykerJS reuses results unless the mutant's own text
   changed, which is faster and unsound when a mutant's behaviour depends on a changed callee.
 
-## Kill criteria
+## Speed targets
 
 | Scenario | Required | Measured | Verdict |
 |---|---|---:|---|

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * tzap's benchmark harness (M7): scenarios from docs/parity-and-benchmarks.md §5, tzap against
+ * tzap's benchmark harness: scenarios from docs/parity-and-benchmarks.md §5, tzap against
  * StrykerJS on the same generated fixture, same machine, same Node, same Vitest.
  *
  *   node tools/bench/bench.mjs [--runs 5] [--stryker-runs 3] [--only S1,S3,...] [--no-stryker]
@@ -629,10 +629,10 @@ if (ONLY.includes('S9') && stat) {
   save();
 }
 
-// Declared, not run: the scenarios that need later milestones.
-results.scenarios.S2 = { title: 'Full run, one Jest package, cold', skipped: 'no Jest variant of the bench fixture yet (the Jest runner landed in a5e8147 while this harness was being built; the generator emits Vitest only)' };
+// Declared, not run: the scenarios with no fixture yet.
+results.scenarios.S2 = { title: 'Full run, one Jest package, cold', skipped: 'no Jest variant of the bench fixture yet (the generator emits Vitest only)' };
 results.scenarios.S7 = { title: 'Full run, monorepo with a test-less library', skipped: 'no monorepo bench fixture yet; tzap supports monorepos but the generator emits one package' };
-results.scenarios.S8 = { title: 'Frontend package (TSX + jsdom), full run', skipped: 'needs jsdom/happy-dom environments (M20)' };
+results.scenarios.S8 = { title: 'Frontend package (TSX + jsdom), full run', skipped: 'no frontend bench fixture yet; tzap supports jsdom and happy-dom but the generator emits Node-only code' };
 results.machine.loadAfter = await cpuBusy();
 save();
 log(`wrote ${path.relative(process.cwd(), OUT)}; render with node tools/bench/render.mjs`);

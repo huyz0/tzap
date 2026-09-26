@@ -137,5 +137,5 @@ accepted:
       no mutant active. Seen on remeda src/debounce.ts; repro fixtures/micro-vitest src/timer.ts.
 
 # Open class-A tzap bugs (never accepted). None: A1 (Vitest 4.1 reporters), A2 (logical-chain
-# precedence) and A3 (uncaught exceptions) are fixed in tzap; see reports/TRIAGE.md.
+# precedence) and A3 (uncaught exceptions) are fixed in tzap.
 open_tzap_bugs: []

@@ -86,11 +86,12 @@ boundary, per-platform binaries, and a second language for contributors.
 
 ## Revisit when
 
-Each is checked by the benchmark harness or a milestone, not by opinion:
+Each is checked by the benchmark harness, not by opinion:
 
 1. **tzap's own CPU work exceeds 10% of wall clock** on any benchmark scenario. Then build a
    napi-rs addon on the same oxc crates that does parse → mutate → instrument → source map
-   natively and returns a string plus a mutant table (delivery plan M22).
+   natively and returns a string plus a mutant table. It is not built: tzap's own CPU work is
+   0.3% of a run ([status.md](../status.md)).
 2. TypeScript ships a stable public Go API and RPC overhead dominates type checking.
 3. oxc stalls or hits a syntax gap the Babel fallback cannot cover.
 4. A watch/IDE mode needs sub-50 ms cold starts and a warm daemon cannot provide them.

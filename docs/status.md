@@ -1,7 +1,7 @@
 # Status
 
-What exists today, what it has been verified against, and what is not built. Milestone numbers
-refer to [delivery-plan.md](delivery-plan.md); every figure comes from a harness in `tools/` or
+What exists today, what it has been verified against, and what is not built. Every figure comes
+from a harness in `tools/` or
 a test, and is reproducible from the commands at the end.
 
 ## Working
@@ -80,8 +80,8 @@ defect:
 
 **Correctness** — `tools/parity`, StrykerJS 10.0.0 and tzap over the same corpus and Vitest
 version, every difference classified in `tools/parity/parity-baseline.yaml` and the gate failing
-on anything unlisted. See [tools/parity/reports/](../tools/parity/reports/) for the per-project
-reports; the three tzap bugs it found (A1–A3) are fixed.
+on anything unlisted; each accepted difference carries its evidence in that file. The three tzap
+bugs it found (A1–A3) are fixed.
 
 **Speed** — `tools/bench`, a generated 40-module, 200-test Vitest package (1,495 mutants),
 Windows, median of 5 (tzap) and 3 (StrykerJS at its fastest concurrency, 10), build `a1a4249`,
@@ -97,7 +97,7 @@ better read as 6–7x.
 | S6 one-line change, warm cache | 1.79 s | 8.77 s | 4.9x |
 | S9 static-heavy | 13.07 s | 20.94 s | 1.6x |
 
-## Kill criteria
+## Speed targets
 
 - **S1 ≥ 3x: met** (7.1x at identical inventory: 1,495 shared mutants, none unique to either
   tool; 6.3x against the previous report's StrykerJS time).
@@ -113,25 +113,25 @@ better read as 6–7x.
 
 ## Measured and deliberately not built
 
-- **M21, a resident daemon or watch mode.** Its gate: a warm-cache diff run spending more than
+- **A resident daemon or watch mode.** Worth building only if a warm-cache diff run spending more than
   half its time on startup. It spends 0.19 s in total (S4); a daemon cannot save a tenth of that.
-- **M22, a native (Rust) instrumenter.** Its gate: tzap's own CPU work above 10% of a run. On
+- **A native (Rust) instrumenter.** Worth building only if tzap's own CPU work above 10% of a run. On
   tzap's own sources it is 144 ms of 52 s (0.3%).
 - **Bun and Deno runners** — [spike C](spikes/C-bun-deno.md): Bun has no programmatic test API;
   Deno has no drivable warm `deno test`. Revisit when either changes.
 
-## Not built yet
+## Not supported yet
 
-| Missing | Where it belongs |
-|---|---|
-| Publishing to npm — the bundle and tarball are verified, but publishing needs the owner's npm account | M24 |
-| tzap's own pull-request job (mutation testing of the diff) — the workflow has it, but it runs only on pull requests and none has been opened | M0 |
-| A 30-day dogfood on external projects (tzap has been run on itself and on three libraries) | M24 |
-| Vitest browser mode, Angular templates, Astro, Karma | M19 |
+- **The npm registry.** The package, its bundle and its tarball are tested
+  (`scripts/pack-smoke.mjs`), but it is not published; [usage.md](usage.md#install) says how to
+  install it from the tarball.
+- **Vitest browser mode, Angular templates, Astro, Karma.**
+- **Field use.** tzap has been run on itself and on three libraries (superjson, es-toolkit,
+  remeda), not yet on a long stretch of real projects' pull requests.
 
 ## Known limitations
 
-- **S3's criterion is unmet** on the benchmark fixture and on remeda's real suite (above).
+- **The 10x diff-run target is not met**, on the benchmark fixture or on remeda's real suite (above).
 - **Type-invalid mutants the tests killed** still count as detected under `--typecheck survivors`
   (the default); `--typecheck all` removes that bias at the cost of checking every mutant.
 - **`--verify-survivors auto` assumes third-party packages hold no state a project mutant

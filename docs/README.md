@@ -22,5 +22,4 @@ How it was built, and why:
 - [research/README.md](research/README.md) — the research and the decisions it forced
 - [adr/0001-implementation-language.md](adr/0001-implementation-language.md) — TypeScript on Node, oxc for parsing
 - [architecture.md](architecture.md) — the engine, the project-model seam, soundness gates
-- [delivery-plan.md](delivery-plan.md) — the milestones, their status, and what building them changed
 - [spikes/](spikes/) — Vitest (A), Jest (B), Bun and Deno (C)

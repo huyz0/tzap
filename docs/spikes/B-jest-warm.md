@@ -1,7 +1,7 @@
 # Spike B: running a Jest test many times against different mutants
 
 - **Date:** 2026-09-26
-- **Question (from M1, needed for M17):** can one long-lived process run a Jest test many times
+- **Question:** can one long-lived process run a Jest test many times
   against different mutants without paying a `runCLI` per mutant? Should the adapter host
   jest-circus + jest-runtime directly, or drive Jest through its public entry point?
 - **Environment:** Jest 30.5.2 (jest-circus, babel-jest + `@babel/preset-typescript` 7.29),
@@ -37,7 +37,7 @@ Where a warm round goes (Jest's own `performance` marks, median of 20):
 
 Nearly all of a warm round is the per-test-file work: a new `Runtime` (module registry), a new
 test environment, jest-circus's initialisation, the test file's module graph from the transform
-cache. That is Jest's semantics (a fresh registry per test file) and M17 requires keeping it. So a
+cache. That is Jest's semantics (a fresh registry per test file) and tzap must keep it. So a
 round costs ~20 ms per test file plus ~5 ms, and one round per mutant — what StrykerJS does, with
 a fresh process on top — is ~46 ms per mutant on this fixture at best.
 
@@ -92,7 +92,7 @@ retries inside that block; a suite that uses them is not supported yet (see limi
 Not pursued. Jest 30 bundles jest-circus into one webpack chunk (`jestAdapterInit.js`) and the
 public `@jest/core` API is `runCLI`, `createTestScheduler`, `SearchSource`, `getVersion`.
 Hosting the runtime ourselves could save only what a round spends outside `scheduleAndRun`
-(~4 ms), because the per-file work *is* the module registry reset M17 requires. Not worth
+(~4 ms), because the per-file work *is* the module registry reset tzap must keep. Not worth
 depending on bundle internals for.
 
 ### The adapter as built — `adapter.mjs`

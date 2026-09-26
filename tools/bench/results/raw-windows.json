@@ -1667,7 +1667,7 @@
     },
     "S8": {
       "title": "Frontend package (TSX + jsdom), full run",
-      "skipped": "needs jsdom/happy-dom environments (M20)"
+      "skipped": "no frontend bench fixture yet; tzap supports jsdom and happy-dom but the generator emits Node-only code"
     }
   },
   "notes": []

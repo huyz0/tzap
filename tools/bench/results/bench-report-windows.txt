@@ -25,13 +25,13 @@ S4  Diff run, same PR, warm cache                0.19s (0.18–0.20, n=5)     �
 S5  Re-run with no changes, warm cache           0.39s (0.29–0.55, n=5)     7.79s (6.69–8.29, n=3)     19.86x          1495 / 1495                0 / 0
 S6  Re-run after a one-line change, warm cache   1.79s (1.45–2.72, n=5)     8.77s (7.10–9.95, n=3)     4.90x           1495 / 1495                23 / 0
 S7  Full run, monorepo with a test-less library  skipped                                                                                          no monorepo bench fixture yet; tzap supports monorepos but the generator emits one package
-S8  Frontend package (TSX + jsdom), full run     skipped                                                                                          needs jsdom/happy-dom environments (M20)
+S8  Frontend package (TSX + jsdom), full run     skipped                                                                                          no frontend bench fixture yet; tzap supports jsdom and happy-dom but the generator emits Node-only code
 S9  Package with many static mutants, full run   13.07s (12.78–14.00, n=5)  20.94s (20.86–21.82, n=3)  1.60x           1214 / 1214 (shared 1214)  1100 / 1100
 
 "Executed" counts mutants that ran at least one test in that run (cached or reused results excluded). Stryker / tzap is the ratio of medians; it is printed only with n >= 3 on both sides and non-empty inventories.
 
-Kill criteria (docs/delivery-plan.md)
-=====================================
+Speed targets
+=============
 
 Scenario  Required  Measured  Verdict  Work parity
 --------  --------  --------  -------  ----------------------------------------------------------------
