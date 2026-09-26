@@ -15,7 +15,8 @@ export interface SfcScripts {
   blockStarts: number[];
 }
 
-const SCRIPT = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
+/** A script block; attribute values may hold `>` (Vue's `generic="T extends Record<K, V>"`). */
+const SCRIPT = /<script\b((?:"[^"]*"|'[^']*'|[^>"'])*)>([\s\S]*?)<\/script\s*>/gi;
 
 export function isSfc(file: string): boolean {
   return /\.(vue|svelte)$/i.test(file);
@@ -29,7 +30,7 @@ export function sfcScripts(source: string): SfcScripts {
   for (const m of source.matchAll(SCRIPT)) {
     const attrs = m[1] ?? '';
     const body = m[2] ?? '';
-    const bodyStart = m.index! + m[0].indexOf('>') + 1;
+    const bodyStart = m.index! + '<script'.length + attrs.length + '>'.length;
     const l = /\blang\s*=\s*["']?(tsx|ts|typescript)["']?/i.exec(attrs)?.[1]?.toLowerCase();
     if (l === 'tsx') lang = 'tsx';
     else if ((l === 'ts' || l === 'typescript') && lang === 'js') lang = 'ts';

@@ -8,7 +8,6 @@
   },
   "scripts": {
     "build": "tsc -b --force packages/tzap",
-    "clean": "node scripts/clean.mjs",
     "test": "vitest run",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check": "pnpm build && pnpm check:boundaries && pnpm test",
@@ -17,7 +16,12 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@vitest/coverage-v8": "5.0.2",
+    "c8": "^12.0.0",
     "esbuild": "0.28.2",
+    "istanbul-lib-coverage": "3.2.2",
+    "istanbul-lib-report": "3.0.1",
+    "istanbul-reports": "3.2.0",
     "typescript": "7.0.2",
     "vitest": "5.0.2"
   }

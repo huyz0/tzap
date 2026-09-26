@@ -74,14 +74,13 @@ export const arithmeticOperator: Mutator = {
 
 export const arrayDeclaration: Mutator = {
   name: 'ArrayDeclaration',
-  mutate(node, ctx) {
+  mutate(node) {
     if (node.type === 'ArrayExpression') {
       return [expr((node.elements as unknown[]).length ? '[]' : '["Stryker was here"]')];
     }
     if ((node.type === 'CallExpression' || node.type === 'NewExpression') && isIdentifier(node.callee, 'Array')) {
       const args = (node.arguments as Node[]).length ? '' : '[]';
       const prefix = node.type === 'NewExpression' ? 'new ' : '';
-      void ctx;
       return [expr(`${prefix}Array(${args})`)];
     }
     return [];
@@ -359,8 +358,9 @@ const METHODS = new Map<string, string | null>([
   ['setUTCHours', 'setUTCMinutes'],
   ['setUTCSeconds', 'setUTCMilliseconds'],
 ]);
+// Each swap works both ways, except that setTime swaps back to setDate, not to setUTCDate.
 for (const [key, value] of [...METHODS]) {
-  if (value && key !== 'getUTCDate' && key !== 'setUTCDate') METHODS.set(value, key);
+  if (value && key !== 'setUTCDate') METHODS.set(value, key);
 }
 
 export const methodExpression: Mutator = {
@@ -372,8 +372,10 @@ export const methodExpression: Mutator = {
     const name = (callee.property as Node & { name: string }).name;
     const next = METHODS.get(name);
     if (next === undefined) return [];
-    if (next === null) return [expr(text(ctx, callee.object as Node))];
     const prop = callee.property as Node;
+    // The object as written, parentheses included: `(a + b).trim()` becomes `(a + b)`, not `a + b`
+    // (the AST drops the parentheses), which would change the meaning where it is spliced.
+    if (next === null) return [expr(ctx.source.slice(node.start, prop.start).replace(/\s*\??\.\s*$/, ''))];
     return [expr(ctx.source.slice(node.start, prop.start) + next + ctx.source.slice(prop.end, node.end))];
   },
 };
@@ -494,6 +496,18 @@ export const stringLiteral: Mutator = {
 
 // --- UnaryOperator ------------------------------------------------------------------------
 
+/**
+ * `op` applied to the expression's operand, as text that reads the same wherever it is spliced:
+ * `-x` becomes `+x`, but `-+x` becomes `+(+x)` rather than the increment `++x`, and the `-x` of
+ * `+-x` becomes `(+x)` rather than joining the `+` before it.
+ */
+function flipSign(op: '+' | '-', node: Node, ctx: MutatorContext): string {
+  let operand = ctx.source.slice(node.start + 1, node.end);
+  if (operand.startsWith(op)) operand = `(${operand})`;
+  const out = `${op}${operand}`;
+  return ctx.source[node.start - 1] === op ? `(${out})` : out;
+}
+
 export const unaryOperator: Mutator = {
   name: 'UnaryOperator',
   mutate(node, ctx) {
@@ -501,9 +515,8 @@ export const unaryOperator: Mutator = {
     const arg = node.argument as Node;
     switch (node.operator) {
       case '+':
-        return [expr(`-${ctx.source.slice(node.start + 1, node.end)}`)];
       case '-':
-        return [expr(`+${ctx.source.slice(node.start + 1, node.end)}`)];
+        return [expr(flipSign(node.operator === '+' ? '-' : '+', node, ctx))];
       case '~':
         return [expr(text(ctx, arg))];
       default:
@@ -576,7 +589,6 @@ export const ALL_MUTATORS: readonly Mutator[] = [
   assignmentOperator,
 ];
 
-export const MUTATOR_NAMES: readonly string[] = ALL_MUTATORS.map((m) => m.name);
 
 /** Mutators outside the default set, selected by name. */
 export const EXTRA_MUTATORS: readonly Mutator[] = [functionBody];

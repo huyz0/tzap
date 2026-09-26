@@ -38,6 +38,12 @@ export interface MutantDescriptor {
   location: Location;
   /** Source text that replaces the original at `location`. */
   replacement: string;
+  /**
+   * The text that replaces the original at `location` when the mutant is active, where it differs
+   * from `replacement` (which keeps StrykerJS's form so reports compare): an arrow function whose
+   * body alone is replaced keeps its `async` and parameters.
+   */
+  runs?: string;
   /** Original source text at `location`. */
   original: string;
   description?: string;

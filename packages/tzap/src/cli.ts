@@ -10,25 +10,23 @@
  *
  * Exit codes: 0 met the bar, 1 did not (threshold or survivors), 2 usage error, 3 analysis failed.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
-import { analyse, type EngineEvent } from '@tzap/core';
+import { analyse, loadCache, relativeTo, saveCache, sourceFiles, type EngineEvent } from '@tzap/core';
 import { discover } from '@tzap/discover';
 import { gitChangedLines, parseUnifiedDiff, type ChangedLines, type LineRange } from '@tzap/git';
-import { ALL_MUTATORS, EXTRA_MUTATORS, aridFilters, instrument } from '@tzap/instrument';
-import { ModelValidationError, parseModel, score, serialiseModel, type ProjectModel, type ScopeSpec } from '@tzap/model';
+import { ALL_MUTATORS, EXTRA_MUTATORS, aridFilters, instrument, type MutantFilter } from '@tzap/instrument';
+import { meetsThreshold, ModelValidationError, parseModel, score, serialiseModel, type Granularity, type ProjectModel, type ScopeSpec } from '@tzap/model';
 import { reporters as reporterRegistry, writeReports } from '@tzap/report';
-
-const reporterNames = Object.keys(reporterRegistry);
 import { createJestSession } from '@tzap/runner-jest';
 import { createMochaSession } from '@tzap/runner-mocha';
 import { createNodeTestSession } from '@tzap/runner-node';
-import { createTypeChecker, typeFilters, type TypeChecker } from '@tzap/typecheck';
 import { createVitestSession } from '@tzap/runner-vitest';
-import { loadCache, saveCache } from '@tzap/core';
+import { createTypeChecker, typeFilters, type TypeChecker } from '@tzap/typecheck';
+import { widenScope } from './scope.js';
 
-import { sourceFiles, relativeTo } from '@tzap/core';
+const reporterNames = Object.keys(reporterRegistry);
 
 export const VERSION = '0.1.0';
 
@@ -113,11 +111,64 @@ function list(v: string | undefined): string[] | undefined {
   return v === undefined ? undefined : v.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-function num(v: string | undefined, name: string): number | undefined {
+/** A whole number of at least 1: a worker or lane count. */
+function count(v: string | undefined, name: string): number | undefined {
   if (v === undefined) return undefined;
   const n = Number(v);
-  if (!Number.isFinite(n)) throw new UsageError(`--${name}: expected a number, got "${v}"`);
+  if (v.trim() === '' || !Number.isInteger(n) || n < 1) throw new UsageError(`--${name}: expected a whole number of at least 1, got "${v}"`);
   return n;
+}
+
+/** A percentage, 0 to 100. */
+function percent(v: string | undefined, name: string): number | undefined {
+  if (v === undefined) return undefined;
+  const n = Number(v);
+  if (v.trim() === '' || !Number.isFinite(n) || n < 0 || n > 100) throw new UsageError(`--${name}: expected a percentage from 0 to 100, got "${v}"`);
+  return n;
+}
+
+/** What decides the inventory of mutants: the same for `run` and `list-mutants`. */
+interface Inventory {
+  mutators: string[] | undefined;
+  filters: Array<{ name: string; filter: MutantFilter }>;
+  reduce: { onePerLine: boolean; equivalence: boolean };
+  /** Type checking, when the project has TypeScript and a tsconfig; the caller closes it. */
+  checker?: TypeChecker;
+  typecheck?: 'survivors' | 'all';
+}
+
+async function inventorySettings(model: ProjectModel, values: Record<string, unknown>, cwd: string, quiet: boolean): Promise<Inventory> {
+  const mutators = values.extreme ? ['FunctionBody'] : list(values.mutators as string | undefined);
+  if (mutators) {
+    const known = new Set([...ALL_MUTATORS, ...EXTRA_MUTATORS].map((m) => m.name));
+    const unknown = mutators.filter((m) => !known.has(m));
+    if (unknown.length) throw new UsageError(`--mutators: unknown ${unknown.join(', ')}; known: ${[...known].join(', ')}`);
+  }
+  const filters = values['no-arid'] ? [] : aridFilters();
+  const reduce = { onePerLine: values['one-per-line'] === true, equivalence: values.dedup === true };
+
+  // Type checking: explicit modes must work; the default quietly steps aside for a project with
+  // no TypeScript or no tsconfig.
+  const requested = values.typecheck as string | undefined;
+  if (requested !== undefined && !['off', 'survivors', 'all'].includes(requested)) throw new UsageError(`--typecheck: expected off, survivors or all, got "${requested}"`);
+  if (requested === 'off') return { mutators, filters, reduce };
+  let checker: TypeChecker | undefined;
+  try {
+    checker = createTypeChecker({ root: model.root, ...(values.tsconfig ? { tsconfig: path.resolve(cwd, values.tsconfig as string) } : {}) });
+    // Asked of a file being mutated: the tsconfig that governs it, not the workspace root's.
+    const probe = model.packages.map((p) => sourceFiles(model.root, p)[0]).find((f) => f !== undefined);
+    const strict = await checker.strictNullChecks(probe ? relativeTo(model.root, probe) : undefined);
+    if (strict === undefined) throw new Error('no tsconfig applies to the project');
+    // Syntactic rules that need no checker; they assume strictNullChecks. Their mutants are
+    // CompileError, like the checker's.
+    if (strict) filters.push(...typeFilters());
+    return { mutators, filters, reduce, checker, typecheck: (requested as 'survivors' | 'all' | undefined) ?? 'survivors' };
+  } catch (e) {
+    await checker?.close();
+    if (requested) throw new UsageError(`--typecheck ${requested}: cannot type-check this project: ${(e as Error).message}`);
+    if (!quiet) process.stderr.write(`tzap: type checking off: ${(e as Error).message}\n`);
+    return { mutators, filters, reduce };
+  }
 }
 
 async function loadModel(file: string | undefined, cwd: string, filter?: string[]): Promise<{ model: ProjectModel; notes: string[] }> {
@@ -146,7 +197,20 @@ async function resolveScope(model: ProjectModel, values: Record<string, unknown>
   const to = values.to as string | undefined;
   const patch = values.patch as string | undefined;
   const scope: ScopeSpec | undefined = patch || from || to ? { kind: 'diff', from, to, patch } : model.scope;
-  if (!scope || scope.kind === 'full') return undefined;
+  const granularity = (values.scope as string | undefined) ?? (scope?.kind === 'diff' ? scope.granularity : undefined) ?? 'line';
+  if (!GRANULARITIES.includes(granularity as Granularity)) throw new UsageError(`--scope: expected line, function or file, got "${granularity}"`);
+  if (!scope || scope.kind === 'full') {
+    if (values.scope !== undefined) throw new UsageError('--scope widens a diff scope: give --from/--to or --patch too');
+    return undefined;
+  }
+  const changed = await changedLines(model, scope, cwd);
+  if (granularity === 'line') return changed;
+  return { ...changed, files: widenScope(model.root, changed.files, granularity as Granularity), description: `${changed.description}, widened to whole ${granularity === 'file' ? 'files' : 'functions'}` };
+}
+
+const GRANULARITIES: readonly Granularity[] = ['line', 'function', 'file'];
+
+async function changedLines(model: ProjectModel, scope: Extract<ScopeSpec, { kind: 'diff' }>, cwd: string): Promise<ChangedLines> {
   if (scope.patch) {
     // Paths in a patch are relative to wherever it was made: usually the repository root, as
     // git writes them, sometimes the current directory. Take whichever names a real file.
@@ -203,21 +267,15 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
     process.stderr.write(`tzap: scope: ${changed.description}\n`);
     process.stderr.write('tzap: the range only selects what to analyse; the analysis runs against the working tree\n');
   }
-  const mutators = values.extreme ? ['FunctionBody'] : list(values.mutators as string | undefined);
-  if (mutators) {
-    const known = new Set([...ALL_MUTATORS, ...EXTRA_MUTATORS].map((m) => m.name));
-    const unknown = mutators.filter((m) => !known.has(m));
-    if (unknown.length) throw new UsageError(`--mutators: unknown ${unknown.join(', ')}; known: ${[...known].join(', ')}`);
-  }
   const engine = (values.engine as string | undefined) ?? 'warm';
   if (engine !== 'warm' && engine !== 'reference') throw new UsageError(`--engine: expected warm or reference, got "${engine}"`);
   const reporters = list(values.reporters as string | undefined) ?? model.reporters ?? ['console'];
   const unknownReporters = reporters.filter((r) => !reporterNames.includes(r));
   if (unknownReporters.length) throw new UsageError(`--reporters: unknown ${unknownReporters.join(', ')}; known: ${reporterNames.join(', ')}`);
   const outDir = path.resolve(cwd, (values['out-dir'] as string | undefined) ?? 'reports/tzap');
-  const threshold = num(values.threshold as string | undefined, 'threshold');
-  const workers = num(values.workers as string | undefined, 'workers');
-  const concurrency = num(values.concurrency as string | undefined, 'concurrency');
+  const threshold = percent(values.threshold as string | undefined, 'threshold');
+  const workers = count(values.workers as string | undefined, 'workers');
+  const concurrency = count(values.concurrency as string | undefined, 'concurrency');
 
   if (values['dry-run']) {
     const lines = [`root: ${model.root}`];
@@ -234,32 +292,8 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
   const cacheDir = (values['cache-dir'] as string | undefined) ?? model.cache?.dir;
   const verifyMode = values['no-verify-survivors'] ? 'off' : ((values['verify-survivors'] as string | undefined) ?? 'auto');
   if (!['auto', 'all', 'off'].includes(verifyMode)) throw new UsageError(`--verify-survivors: expected auto, all or off, got "${verifyMode}"`);
-  const filters = values['no-arid'] ? [] : aridFilters();
-
-  // Type checking: explicit modes must work; the default quietly steps aside for a project with
-  // no TypeScript or no tsconfig.
-  const tcRequested = values.typecheck as string | undefined;
-  if (tcRequested !== undefined && !['off', 'survivors', 'all'].includes(tcRequested)) throw new UsageError(`--typecheck: expected off, survivors or all, got "${tcRequested}"`);
-  let checker: TypeChecker | undefined;
-  let tcMode: 'survivors' | 'all' | undefined;
-  if (tcRequested !== 'off') {
-    try {
-      checker = createTypeChecker({ root: model.root, ...(values.tsconfig ? { tsconfig: path.resolve(cwd, values.tsconfig as string) } : {}) });
-      // Asked of a file being mutated: the tsconfig that governs it, not the workspace root's.
-      const probe = model.packages.map((p) => sourceFiles(model.root, p)[0]).find((f) => f !== undefined);
-      const strict = await checker.strictNullChecks(probe ? relativeTo(model.root, probe) : undefined);
-      if (strict === undefined) throw new Error('no tsconfig applies to the project');
-      tcMode = (tcRequested as 'survivors' | 'all' | undefined) ?? 'survivors';
-      // Syntactic rules that need no checker, each measured at 99.6-100% precision; they assume
-      // strictNullChecks. Their mutants are CompileError, like the checker's.
-      if (strict) for (const f of typeFilters()) filters.push({ name: `type:${f.name}`, filter: f.filter });
-    } catch (e) {
-      await checker?.close();
-      checker = undefined;
-      if (tcRequested) throw new UsageError(`--typecheck ${tcRequested}: cannot type-check this project: ${(e as Error).message}`);
-      if (!quiet) process.stderr.write(`tzap: type checking off: ${(e as Error).message}\n`);
-    }
-  }
+  const inv = await inventorySettings(model, values, cwd, quiet);
+  const { mutators, filters, checker, typecheck: tcMode } = inv;
   const cache = cacheDir
     ? loadCache(path.resolve(cwd, cacheDir), model, { tzapVersion: VERSION, mutators, filters: filters.map((f) => f.name), typecheck: checker && tcMode ? tcMode : 'off', verifySurvivors: verifyMode })
     : undefined;
@@ -269,7 +303,7 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
     engine,
     mutators,
     filters,
-    reduce: { onePerLine: values['one-per-line'] === true, equivalence: values.dedup === true },
+    reduce: inv.reduce,
     verifySurvivors: verifyMode === 'all' ? true : verifyMode === 'off' ? false : 'auto',
     ...(checker && tcMode ? { typecheck: { mode: tcMode, check: (m, root) => checker!.check(m, root) } } : {}),
     lines: changed?.files,
@@ -286,13 +320,12 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
   await checker?.close();
   if (cache) saveCache(cache, result);
 
-  mkdirSync(outDir, { recursive: true });
   const stdout = writeReports(result, reporters, { outDir, color: process.stdout.isTTY === true, threshold });
   if (stdout) process.stdout.write(stdout.endsWith('\n') ? stdout : `${stdout}\n`);
 
   const s = score(result.mutants);
   if (s.runtimeError > 0) return 3;
-  if (threshold !== undefined && !(s.mutationScore >= threshold)) return 1;
+  if (threshold !== undefined && !meetsThreshold(s.mutationScore, threshold)) return 1;
   if (values['fail-on-survivors'] && s.survived > 0) return 1;
   return 0;
 }
@@ -300,14 +333,16 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
 async function listMutants(values: Record<string, unknown>, cwd: string): Promise<number> {
   const { model } = await loadModel(values.model as string | undefined, cwd);
   const changed = await resolveScope(model, values, cwd);
-  const mutators = list(values.mutators as string | undefined);
+  // The inventory `run` would analyse: the same mutators, filters and reductions.
+  const inv = await inventorySettings(model, values, cwd, true);
+  await inv.checker?.close();
   const all = [];
   for (const pkg of model.packages) {
     for (const abs of sourceFiles(model.root, pkg)) {
       const rel = relativeTo(model.root, abs);
       const lines = changed ? changed.files.get(rel) : undefined;
       if (changed && !lines) continue;
-      const out = instrument({ file: rel, source: readFileSync(abs, 'utf8'), mutators, lines, filters: values['no-arid'] ? [] : aridFilters(), firstMutant: 0, firstSite: 0 });
+      const out = instrument({ file: rel, source: readFileSync(abs, 'utf8'), mutators: inv.mutators, lines, filters: inv.filters, reduce: inv.reduce, firstMutant: 0, firstSite: 0 });
       all.push(...out.mutants.map(({ num: _n, site: _s, ...m }) => m));
     }
   }
@@ -335,6 +370,10 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
       process.stdout.write(`${HELP}\n`);
       return 0;
     }
+    if (values.version) {
+      process.stdout.write(`${VERSION}\n`);
+      return 0;
+    }
     switch (command) {
       case 'run':
         return await run(values, cwd);
@@ -350,6 +389,7 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
         return await listMutants(values, cwd);
       case 'mutators':
         for (const m of ALL_MUTATORS) process.stdout.write(`${m.name}\n`);
+        for (const m of EXTRA_MUTATORS) process.stdout.write(`${m.name}  (opt-in: --mutators ${m.name}, or --extreme)\n`);
         return 0;
       default:
         throw new UsageError(`unknown command "${command}"; expected run, model, list-mutants or mutators`);

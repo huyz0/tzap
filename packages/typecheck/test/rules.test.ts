@@ -54,7 +54,6 @@ describe('type-directed rules on typed-vitest', () => {
       ['src/config.ts:21 ObjectLiteral', 'type:required-properties'],
       ['src/shapes.ts:23 ObjectLiteral', 'type:required-properties'],
       ['src/config.ts:31 ObjectLiteral', 'type:used-keys'],
-      ['src/shapes.ts:16 ArrowFunction', 'type:called-arrow'],
       ['src/shapes.ts:10 BlockStatement', 'type:returning-body'],
       ['src/shapes.ts:26 BlockStatement', 'type:returning-body'],
       ['src/blocks.ts:2 BlockStatement', 'type:returning-body'],
@@ -84,8 +83,9 @@ describe('type-directed rules on typed-vitest', () => {
     const shipped = typeFilters().map((f) => f.name);
     expect(shipped).not.toContain('type:declared-return-arrow');
     expect(shipped).not.toContain('type:untyped-array');
-    // The roadmap's naive ArrowFunction rule: `trimmed` declares `: string`, yet `() => undefined` compiles.
+    // The naive ArrowFunction rule flags `flush`, an async arrow declared `Promise<void>`: returning
+    // `undefined` there still returns a promise, and compiles.
     const naive = flaggedBy('type:declared-return-arrow');
-    expect(naive.some((m) => !invalid.has(m.num))).toBe(true);
+    expect(naive.filter((m) => !invalid.has(m.num)).map(where)).toEqual(['src/math.ts:38 ArrowFunction']);
   });
 });

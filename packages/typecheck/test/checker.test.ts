@@ -69,6 +69,10 @@ describe.each(BACKENDS)('checker on typed-vitest ($name)', ({ options, expect: k
       [find('src/config.ts', 21, 'ObjectLiteral'), 'TS2739'],
       [find('src/config.ts', 31, 'ObjectLiteral'), 'TS2339'],
       [find('src/math.ts', 15, 'ArrowFunction'), 'TS2322'],
+      // What runs keeps the declared return type: `(n: number): number => undefined`.
+      [find('src/math.ts', 2, 'ArrowFunction'), 'TS2322'],
+      [find('src/math.ts', 26, 'ArrowFunction'), 'TS2322'],
+      [find('src/math.ts', 29, 'ArrowFunction'), 'TS2322'],
       [find('src/blocks.ts', 2, 'BlockStatement'), 'TS2355'],
       [find('src/blocks.ts', 18, 'BlockStatement'), 'TS2366'],
       [find('src/blocks.ts', 37, 'BlockStatement'), 'TS2454'],
@@ -81,7 +85,7 @@ describe.each(BACKENDS)('checker on typed-vitest ($name)', ({ options, expect: k
   });
 
   it('rejects a mutant that only breaks an importing file (the test calling it)', () => {
-    expect(single.get(find('src/math.ts', 2, 'ArrowFunction').num)).toMatch(/^test\/math\.test\.ts\(\d+,\d+\): error TS2554/);
+    expect(single.get(find('src/math.ts', 35, 'ArrowFunction').num)).toMatch(/^test\/math\.test\.ts\(\d+,\d+\): error TS2532/);
   });
 
   it('accepts type-valid mutants', () => {
@@ -93,7 +97,9 @@ describe.each(BACKENDS)('checker on typed-vitest ($name)', ({ options, expect: k
       find('src/config.ts', 26, 'ObjectLiteral'),
       find('src/math.ts', 19, 'ArrowFunction'),
       find('src/math.ts', 23, 'ArrowFunction'),
-      find('src/math.ts', 26, 'ArrowFunction'),
+      // Async arrows keep returning a promise.
+      find('src/math.ts', 32, 'ArrowFunction'),
+      find('src/math.ts', 38, 'ArrowFunction'),
       find('src/math.ts', 10, 'BlockStatement'),
       find('src/blocks.ts', 3, 'BlockStatement'),
       find('src/blocks.ts', 24, 'BlockStatement'),
@@ -107,8 +113,8 @@ describe.each(BACKENDS)('checker on typed-vitest ($name)', ({ options, expect: k
     expect(rejectedKeys(mutants, grouped)).toEqual(rejectedKeys(mutants, single));
   });
 
-  it('finds 49 of the fixture mutants type-invalid', () => {
-    expect(single.size).toBe(49);
+  it('finds 52 of the fixture mutants type-invalid', () => {
+    expect(single.size).toBe(52);
   });
 });
 

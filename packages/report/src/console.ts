@@ -1,5 +1,5 @@
-import { score, type AnalysisResult } from '@tzap/model';
-import { byFile, byTest, describe, pct, sorted, sourceLines, type ReportContext } from './util.js';
+import { meetsThreshold, score, type AnalysisResult } from '@tzap/model';
+import { byFile, byTest, describe, pct, SCORE_THRESHOLDS, sorted, sourceLines, type ReportContext } from './util.js';
 
 /** Lines of a multi-line original shown under a survivor before the rest is summarised. */
 const SNIPPET_LINES = 3;
@@ -57,8 +57,8 @@ export function consoleReport(result: AnalysisResult, ctx: Pick<ReportContext, '
   out.push(`  ${'-'.repeat(20)}`);
   row('total', s.total);
 
-  const passing = ctx.threshold === undefined ? s.mutationScore >= 80 : s.mutationScore >= ctx.threshold;
-  const scoreText = (passing ? green : ctx.threshold === undefined && s.mutationScore >= 60 ? yellow : red)(pct(s.mutationScore));
+  const passing = meetsThreshold(s.mutationScore, ctx.threshold ?? SCORE_THRESHOLDS.high);
+  const scoreText = (passing ? green : ctx.threshold === undefined && s.mutationScore >= SCORE_THRESHOLDS.low ? yellow : red)(pct(s.mutationScore));
   out.push('', `${bold('Mutation score')} ${scoreText} (test strength ${pct(s.mutationScoreBasedOnCoveredCode)}, ignoring uncovered mutants)`);
   if (ctx.threshold !== undefined) out.push(`Threshold ${pct(ctx.threshold)}: ${passing ? green('passed') : red('failed')}`);
   if (s.invalid > 0) {

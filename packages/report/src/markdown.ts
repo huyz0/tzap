@@ -1,4 +1,4 @@
-import { score, type AnalysisResult } from '@tzap/model';
+import { meetsThreshold, score, type AnalysisResult } from '@tzap/model';
 import { byFile, describe, pct, sorted, type ReportContext } from './util.js';
 
 /** Survivor rows listed before the rest are summarised; a PR comment is not the full report. */
@@ -25,7 +25,7 @@ export function markdownReport(result: AnalysisResult, ctx: Pick<ReportContext, 
     `| **${pct(s.mutationScore)}** | ${pct(s.mutationScoreBasedOnCoveredCode)} | ${s.killed} | ${s.survived} | ${s.noCoverage} | ${s.timeout} | ${s.compileError} | ${s.runtimeError} | ${s.ignored} | ${s.total} |`,
   ];
   if (ctx.threshold !== undefined) {
-    const passed = s.mutationScore >= ctx.threshold;
+    const passed = meetsThreshold(s.mutationScore, ctx.threshold);
     out.push('', `Threshold ${pct(ctx.threshold)}: **${passed ? 'passed' : 'failed'}**`);
   }
   if (result.redTests.length > 0) {

@@ -24,16 +24,18 @@ const RULES = {
   'runner-vitest': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime'] },
   'runner-node': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime'] },
   'runner-jest': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime'] },
+  'runner-mocha': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime'] },
   typecheck: { allow: ['@tzap/model', '@tzap/instrument', '@tzap/protocol'] },
 };
 
 const walk = (dir) =>
   readdirSync(dir).flatMap((f) => {
     const p = path.join(dir, f);
-    return statSync(p).isDirectory() ? walk(p) : /\.(ts|mts|js|mjs)$/.test(f) ? [p] : [];
+    return statSync(p).isDirectory() ? walk(p) : /\.(c|m)?[jt]s$/.test(f) ? [p] : [];
   });
 
-const IMPORT = /(?:import|export)\s[^'"`]*?from\s*['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]\s*\)|^\s*import\s+['"]([^'"]+)['"]/gm;
+// `import ... from`, `import()`, a bare `import '...'`, and the CommonJS forms: `import x = require()`, `require()`.
+const IMPORT = /(?:import|export)\s[^'"`]*?from\s*['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]\s*\)|^\s*import\s+['"]([^'"]+)['"]|\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/gm;
 const packageName = (spec) => (spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0]);
 
 const problems = [];
@@ -46,11 +48,13 @@ for (const pkg of readdirSync(packagesDir)) {
     continue;
   }
   const rule = RULES[pkg];
+  // The CLI is the composition root, allowed everything; every other package needs a rule.
+  if (!rule && pkg !== 'tzap') problems.push(`packages/${pkg}: no boundary rule; add one to scripts/check-boundaries.mjs`);
   for (const file of files) {
     // Template literals hold generated code (the Vitest setup shim), not imports of this package.
     const text = readFileSync(file, 'utf8').replace(/`(?:\\.|[^`\\])*`/g, '``');
     for (const m of text.matchAll(IMPORT)) {
-      const spec = m[1] ?? m[2] ?? m[3];
+      const spec = m[1] ?? m[2] ?? m[3] ?? m[4];
       if (!spec || spec.startsWith('.')) continue;
       const rel = path.relative(root, file);
       if (spec === 'tzap' || spec.startsWith('tzap/')) problems.push(`${rel}: imports the CLI (${spec})`);

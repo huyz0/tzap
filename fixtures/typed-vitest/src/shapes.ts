@@ -12,7 +12,7 @@ export class Box {
   }
 }
 
-/** An unannotated arrow called with an argument in this file: `() => undefined` takes none. */
+/** An unannotated arrow whose result is added to a number: returning `undefined` is a type error. */
 const area = (s: Shape) => (s.kind === 'circle' ? 3 * s.size * s.size : s.size * s.size);
 
 export function totalArea(shapes: Shape[]): number {

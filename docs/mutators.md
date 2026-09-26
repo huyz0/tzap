@@ -45,7 +45,9 @@ npx tzap run --mutators EqualityOperator,ConditionalExpression
 - **`ArrowFunction` keeps the function.** Stryker replaces `async (a, b) => expr` with
   `() => undefined`, which also changes its arity, its `async`-ness and the name a variable gives
   it — so the mutant can die for reasons that have nothing to do with the value it returns.
-  tzap replaces only the returned expression.
+  tzap replaces only the returned expression. Reports keep Stryker's `() => undefined` as the
+  replacement, so the two tools' reports line up, and give what actually runs in the mutant's
+  `runs` field (`async (a, b) => undefined`); the type checker checks that.
 - **A `case` that declares `let`/`const`/`class`/`function` is not emptied.** Wrapping it would
   change the scope of a binding other cases can see.
 - **`(a ?? b) ?? c` with its outer `??` swapped becomes `(a ?? b) && c`**, parenthesised: without

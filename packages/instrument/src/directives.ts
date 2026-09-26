@@ -53,7 +53,4 @@ export class Directives {
     return undefined;
   }
 
-  get empty(): boolean {
-    return this.directives.length === 0;
-  }
 }

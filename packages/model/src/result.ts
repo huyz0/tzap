@@ -104,6 +104,14 @@ export function score(mutants: ReadonlyArray<{ status: MutantStatus }>): Score {
   };
 }
 
+/**
+ * Whether a mutation score meets a threshold. A run with nothing to score (no valid mutant: a
+ * diff that touched no mutable code) meets any threshold: there is nothing its tests missed.
+ */
+export function meetsThreshold(mutationScore: number, threshold: number): boolean {
+  return Number.isNaN(mutationScore) || mutationScore >= threshold;
+}
+
 export function languageOf(file: string): string {
   const ext = file.slice(file.lastIndexOf('.') + 1).toLowerCase();
   switch (ext) {

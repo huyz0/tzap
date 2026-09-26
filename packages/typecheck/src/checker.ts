@@ -17,7 +17,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { MutantDescriptor } from '@tzap/model';
-import { parse, type Node } from '@tzap/instrument';
+import { LineIndex, parse, truncate, type Node } from '@tzap/instrument';
 import { type Backend, type Diag, fileKey, loadBackend, slash, type TypeScriptChoice } from './backend.js';
 
 export interface TypeCheckerOptions {
@@ -72,7 +72,7 @@ interface FileState {
   rel: string;
   source: string;
   tsconfig: string;
-  lineStarts: number[];
+  lines: LineIndex;
   units: Unit[];
   /** Project files importing this file directly. */
   importers: string[];
@@ -84,30 +84,6 @@ interface Edit {
   start: number;
   end: number;
   unit: number;
-}
-
-function lineStartsOf(text: string): number[] {
-  const starts = [0];
-  for (let i = 0; i < text.length; i++) {
-    const ch = text.charCodeAt(i);
-    if (ch === 10) starts.push(i + 1);
-    else if (ch === 13) {
-      if (text.charCodeAt(i + 1) === 10) i++;
-      starts.push(i + 1);
-    }
-  }
-  return starts;
-}
-
-function positionOf(starts: readonly number[], offset: number): { line: number; column: number } {
-  let lo = 0;
-  let hi = starts.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (starts[mid]! <= offset) lo = mid;
-    else hi = mid - 1;
-  }
-  return { line: lo + 1, column: offset - starts[lo]! + 1 };
 }
 
 /** [start, end, solo]: a grouping unit, and whether its mutants must be checked alone. */
@@ -180,7 +156,7 @@ function importGraph(sources: readonly string[]): Map<string, string[]> {
 interface Located extends Diag {
   file: string;
   /** Checked text, for reporting line and column. */
-  starts: readonly number[];
+  lines: LineIndex;
 }
 
 export function createTypeChecker(options: TypeCheckerOptions): TypeChecker {
@@ -252,7 +228,7 @@ export function createTypeChecker(options: TypeCheckerOptions): TypeChecker {
           rel,
           source,
           tsconfig,
-          lineStarts: lineStartsOf(source),
+          lines: new LineIndex(source),
           units: grouping ? unitsOf(rel, source) : [],
           importers: graph.get(key) ?? [],
         };
@@ -262,7 +238,7 @@ export function createTypeChecker(options: TypeCheckerOptions): TypeChecker {
     return state;
   };
 
-  const offsetOf = (f: FileState, p: { line: number; column: number }) => (f.lineStarts[p.line - 1] ?? f.source.length) + p.column - 1;
+  const offsetOf = (f: FileState, p: { line: number; column: number }) => f.lines.offset(p.line, p.column);
 
   const readText = (file: string) => {
     const k = fileKey(file);
@@ -310,7 +286,8 @@ export function createTypeChecker(options: TypeCheckerOptions): TypeChecker {
       let out = '';
       let at = 0;
       for (const e of list) {
-        out += src.slice(at, e.start) + e.m.replacement;
+        // What runs, not what the report shows: they differ for an arrow function's body.
+        out += src.slice(at, e.start) + spliced(e.m);
         at = e.end;
       }
       out += src.slice(at);
@@ -324,15 +301,17 @@ export function createTypeChecker(options: TypeCheckerOptions): TypeChecker {
     requests.forEach((req, i) => {
       const key = fileKey(req.file);
       const text = texts.get(key) ?? readText(req.file);
-      const starts = lineStartsOf(text);
       const fresh = newDiagnostics(baselines.get(key) ?? [], diags[i]!, req.edits);
-      if (fresh.length > 0) introduced.push({ req, diags: fresh.map((d) => ({ ...d, file: req.file, starts })) });
+      if (fresh.length > 0) {
+        const lines = new LineIndex(text);
+        introduced.push({ req, diags: fresh.map((d) => ({ ...d, file: req.file, lines })) });
+      }
     });
     return introduced;
   };
 
   const format = (d: Located) => {
-    const p = positionOf(d.starts, d.start);
+    const p = d.lines.position(d.start);
     const rel = slash(path.relative(root, d.file));
     return `${rel}(${p.line},${p.column}): error TS${d.code}: ${d.message}`;
   };
@@ -427,10 +406,8 @@ export function createTypeChecker(options: TypeCheckerOptions): TypeChecker {
         const start = offsetOf(f, m.location.start);
         const end = offsetOf(f, m.location.end);
         // The file changed since instrumentation: splicing at stale offsets would reject a valid
-        // mutant. `original` is only a guard here (truncated to 197 chars + '...' for long nodes).
-        const at = f.source.slice(start, end);
-        const truncated = m.original.length === 200 && m.original.endsWith('...') && at.length > 200 && at.startsWith(m.original.slice(0, 197));
-        if (at !== m.original && !truncated) {
+        // mutant. `original` is the text as reported (truncated when long): only a guard here.
+        if (truncate(f.source.slice(start, end)) !== m.original) {
           stats.stale++;
           continue;
         }
@@ -459,15 +436,18 @@ export function createTypeChecker(options: TypeCheckerOptions): TypeChecker {
   };
 }
 
+/** The text that replaces a mutant's location when it runs; see MutantDescriptor.runs. */
+const spliced = (m: { replacement: string; runs?: string }) => m.runs ?? m.replacement;
+
 /** Whether diagnostic `d` (in mutated coordinates of a file with `edits`) starts inside edit `e`'s replacement. */
 function inside(d: Diag, e: Edit, edits: readonly Edit[]): boolean {
   let shift = 0;
   for (const x of edits) {
     if (x === e) break;
-    shift += x.m.replacement.length - (x.end - x.start);
+    shift += spliced(x.m).length - (x.end - x.start);
   }
   const s = e.start + shift;
-  return d.start >= s && d.start <= s + e.m.replacement.length;
+  return d.start >= s && d.start <= s + spliced(e.m).length;
 }
 
 /** Whether diagnostic `d` (mutated coordinates) lies in the grouping unit that holds edit `e`. */
@@ -476,8 +456,8 @@ function withinUnit(d: Diag, e: Edit, edits: readonly Edit[]): boolean {
   const [us, ue] = e.file.units[e.unit]!;
   // Shift of every edit before the unit's start, and inside the unit (only `e` can be there).
   let before = 0;
-  for (const x of edits) if (x.end <= us) before += x.m.replacement.length - (x.end - x.start);
-  const grow = e.m.replacement.length - (e.end - e.start);
+  for (const x of edits) if (x.end <= us) before += spliced(x.m).length - (x.end - x.start);
+  const grow = spliced(e.m).length - (e.end - e.start);
   return d.start >= us + before && d.start < ue + before + grow;
 }
 
@@ -486,14 +466,14 @@ function withinUnit(d: Diag, e: Edit, edits: readonly Edit[]): boolean {
  * matches a mutated one with the same code and message whose position maps back to the same
  * offset, or, when either lies in an edited region, falls in the same edited region.
  */
-export function newDiagnostics(baseline: readonly Diag[], mutated: readonly Diag[], edits: ReadonlyArray<{ start: number; end: number; m: { replacement: string } }>): Diag[] {
+export function newDiagnostics(baseline: readonly Diag[], mutated: readonly Diag[], edits: ReadonlyArray<{ start: number; end: number; m: { replacement: string; runs?: string } }>): Diag[] {
   // Map a mutated offset back to the original: [kind, value] where kind 'at' is an exact offset, 'edit' an edit index.
   const back = (offset: number): { at: number } | { edit: number } => {
     let shift = 0;
     for (let i = 0; i < edits.length; i++) {
       const e = edits[i]!;
       const s = e.start + shift;
-      const len = e.m.replacement.length;
+      const len = spliced(e.m).length;
       if (offset < s) return { at: offset - shift };
       if (offset <= s + len) return { edit: i };
       shift += len - (e.end - e.start);

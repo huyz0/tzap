@@ -29,6 +29,11 @@ export class LineIndex {
     return this.position(offset).line;
   }
 
+  /** The offset of a 1-based line and column: the inverse of `position`. */
+  offset(line: number, column: number): number {
+    return (this.starts[line - 1] ?? this.source.length) + column - 1;
+  }
+
   get lineCount(): number {
     return this.starts.length;
   }
@@ -80,7 +85,8 @@ export function skipTrivia(source: string, from: number): number {
   }
 }
 
-/** Replaces [start, end) of `source` inside the window [wStart, wEnd) and returns the window's text. */
-export function spliceWindow(source: string, wStart: number, wEnd: number, start: number, end: number, text: string): string {
-  return source.slice(wStart, start) + text + source.slice(end, wEnd);
+
+/** Source text as mutants report it: at most 200 characters, a longer one cut to 197 and `...`. */
+export function truncate(s: string): string {
+  return s.length > 200 ? `${s.slice(0, 197)}...` : s;
 }

@@ -1,5 +1,5 @@
 import { languageOf, type AnalysisResult } from '@tzap/model';
-import { byFile, byTest, ordered, sorted, sortedKeys } from './util.js';
+import { byFile, byTest, ordered, SCORE_THRESHOLDS, sorted, sortedKeys } from './util.js';
 
 /** The mutation-testing-elements report schema major this writer targets (package version 3.9.0). */
 export const ELEMENTS_SCHEMA_VERSION = '2';
@@ -56,7 +56,7 @@ export function elementsReport(result: AnalysisResult) {
 
   return {
     schemaVersion: ELEMENTS_SCHEMA_VERSION,
-    thresholds: { high: 80, low: 60 },
+    thresholds: { ...SCORE_THRESHOLDS },
     projectRoot: result.root,
     config: ordered(result.config, ['engine', 'typecheck', 'scope', 'mutators', 'filters']),
     files,

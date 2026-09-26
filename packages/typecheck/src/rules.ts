@@ -6,8 +6,7 @@
  *
  * Every rule was measured for precision against the checker on the tzap sources and the
  * typed-vitest fixture (7.9k mutants). `TYPE_RULES` marks `shipped` only the rules that measured
- * 100% precision; the others (the roadmap's naive ArrowFunction rule among them) are exported for
- * measurement and never enabled by default.
+ * 100% precision; the others are exported for measurement and never enabled by default.
  *
  * All rules assume `strict` (at least `strictNullChecks`); they must be off for a project that is
  * not strict, which only the caller (who reads the tsconfig) can know.
@@ -249,33 +248,28 @@ export const usedKeysRule: MutantFilter = ({ mutatorName, node, ancestors }) => 
 };
 
 /**
- * `ArrowFunction` → `() => undefined` bound to an unannotated `const` that the file calls with
- * arguments (TS2554), or to a `const` annotated with a function type that returns a value.
+ * `ArrowFunction` bound to a `const` annotated with a function type that returns a value: the
+ * mutant runs as the same arrow returning `undefined` (its parameters and `async` kept, see
+ * MutantDescriptor.runs), which that type rejects. An `async` arrow returns a promise either way.
  */
-export const calledArrowRule: MutantFilter = ({ mutatorName, node, ancestors }) => {
+export const typedArrowRule: MutantFilter = ({ mutatorName, node, ancestors }) => {
   if (mutatorName !== 'ArrowFunction') return undefined;
   const decl = ancestors[ancestors.length - 1];
   const stmt = ancestors[ancestors.length - 2];
   if (!decl || decl.type !== 'VariableDeclarator' || decl.init !== node || stmt?.kind !== 'const') return undefined;
-  const name = nameOf(decl.id as Node);
-  if (!name) return undefined;
-  const program = programOf(ancestors);
   const t = ann(decl.id as Node);
-  if (t) {
-    if (t.type !== 'TSFunctionType') return undefined;
-    const r = ann(t.returnType as Node);
-    if (!r) return undefined;
-    const ms = members(r, program);
-    return ms.length > 0 && ms.every((m) => !NULLISH.has(m.type) && !LOOSE.has(m.type)) ? 'type-invalid: the declared function type returns a value' : undefined;
-  }
-  if ((node.params as Node[]).length === 0 || !program) return undefined;
-  for (const n of walk(program)) {
-    if (n.type === 'CallExpression' && nameOf(n.callee as Node) === name && (n.arguments as Node[]).length > 0) return 'type-invalid: called with arguments';
-  }
-  return undefined;
+  if (!t || t.type !== 'TSFunctionType' || node.async === true) return undefined;
+  const r = ann(t.returnType as Node);
+  if (!r) return undefined;
+  const ms = members(r, programOf(ancestors));
+  return ms.length > 0 && ms.every((m) => !NULLISH.has(m.type) && !LOOSE.has(m.type)) ? 'type-invalid: the declared function type returns a value' : undefined;
 };
 
-/** The roadmap's naive rule, kept for measurement only: `ArrowFunction` whose own declared return type is non-void. */
+/**
+ * `ArrowFunction` whose own declared return type is non-void. Kept for measurement, off by
+ * default: it is wrong for an `async` arrow declared `Promise<void>`, which returns a promise of
+ * undefined either way.
+ */
 export const declaredReturnArrowRule: MutantFilter = ({ mutatorName, node, ancestors }) => {
   if (mutatorName !== 'ArrowFunction') return undefined;
   const t = ann(node.returnType as Node);
@@ -390,7 +384,7 @@ export const TYPE_RULES: readonly TypeRule[] = [
   { name: 'type:returning-body', filter: returningBodyRule, mutator: 'BlockStatement', shipped: true },
   { name: 'type:required-properties', filter: requiredPropertiesRule, mutator: 'ObjectLiteral', shipped: true },
   { name: 'type:used-keys', filter: usedKeysRule, mutator: 'ObjectLiteral', shipped: true },
-  { name: 'type:called-arrow', filter: calledArrowRule, mutator: 'ArrowFunction', shipped: true },
+  { name: 'type:typed-arrow', filter: typedArrowRule, mutator: 'ArrowFunction', shipped: true },
   { name: 'type:nullable-receiver', filter: nullableReceiverRule, mutator: 'OptionalChaining', shipped: true },
   { name: 'type:nullish-to-and', filter: nullishToAndRule, mutator: 'LogicalOperator', shipped: true },
   { name: 'type:boolean-in-value-position', filter: booleanInValuePositionRule, mutator: 'ConditionalExpression', shipped: true },

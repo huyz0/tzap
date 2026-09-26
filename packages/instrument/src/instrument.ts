@@ -8,7 +8,7 @@ import { ALL_MUTATORS, EXTRA_MUTATORS, forTestOffset, type Mutator, type Placeme
 import { parse } from './parse.js';
 import { compiledForm } from './equivalence.js';
 import { isSfc, sfcScripts, type SfcScripts } from './sfc.js';
-import { LineIndex } from './text.js';
+import { LineIndex, truncate } from './text.js';
 
 export type LineRange = readonly [start: number, end: number];
 
@@ -199,7 +199,6 @@ function scopeName(node: Node, parent: Node | undefined, anonymous: number): str
   }
 }
 
-const truncate = (s: string) => (s.length > 200 ? `${s.slice(0, 197)}...` : s);
 
 export function instrument(input: InstrumentInput): InstrumentOutput {
   const { file } = input;
@@ -302,8 +301,8 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
     }
     const scope = scopes.join('/');
 
-    const subtreeStart = candidates.length;
-    const ownStart = candidates.length;
+    // Candidates from here to `ownEnd` are this node's own; from here to the end, its subtree's.
+    const start = candidates.length;
     if (overlaps(node)) {
       const ctx = { source, parent, ancestors };
       for (const m of mutators) {
@@ -340,9 +339,9 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
     // node only when the count of live mutants in the subtree satisfies it.
     for (const m of mutators) {
       if (!m.keep) continue;
-      const own = candidates.slice(ownStart, ownEnd).filter((c) => c.mutatorName === m.name && !c.ignoredBy && !c.removed);
+      const own = candidates.slice(start, ownEnd).filter((c) => c.mutatorName === m.name && !c.ignoredBy && !c.removed);
       if (own.length === 0) continue;
-      const inScopeCount = candidates.slice(subtreeStart).filter((c) => !c.ignoredBy && !c.removed).length;
+      const inScopeCount = candidates.slice(start).filter((c) => !c.ignoredBy && !c.removed).length;
       if (!m.keep(inScopeCount)) for (const c of own) c.removed = true;
     }
 
@@ -383,6 +382,9 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
       description: `replaced ${truncate(original.replace(/\s+/g, ' '))} with ${c.replacement}`,
       site: -1,
     };
+    // An arrow function's body is replaced, not the arrow: `async (x) => undefined` runs where the
+    // report (as StrykerJS names it) says `() => undefined`.
+    if (c.placement === 'arrow-body') d.runs = source.slice(c.node.start, (c.node.body as Node).start) + 'undefined';
     if (c.ignoredBy) {
       d.ignoredBy = c.ignoredBy;
       d.description = c.statusReason ?? d.description;
@@ -392,11 +394,8 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
   }
 
   const placed = live.filter((c) => !c.ignoredBy);
-  if (placed.length === 0 && loops.length === 0) {
-    return { code: undefined, map: undefined, mutants: descriptors, nextMutant, nextSite, errors };
-  }
+  // Nothing to switch on: loops alone are not worth instrumenting a file for.
   if (placed.length === 0) {
-    // Loops alone are not worth instrumenting a file for: no mutant can be active in it.
     return { code: undefined, map: undefined, mutants: descriptors, nextMutant, nextSite, errors };
   }
 
@@ -624,7 +623,7 @@ function reduceEquivalent(live: Candidate[], source: string, file: string): void
     const twin = seen.get(form);
     if (twin) {
       c.ignoredBy = 'duplicate';
-      c.statusReason = `compiles to the same program as another mutant (${twin.mutatorName} replacing ${truncate(source.slice(twin.node.start, twin.node.end).replace(/s+/g, ' '))})`;
+      c.statusReason = `compiles to the same program as another mutant (${twin.mutatorName} replacing ${truncate(source.slice(twin.node.start, twin.node.end).replace(/\s+/g, ' '))})`;
       continue;
     }
     seen.set(form, c);

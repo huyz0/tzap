@@ -334,6 +334,12 @@ describe('single-file components', () => {
     const out = instrument({ file: 'C.svelte', source: src, mutators: ['ArithmeticOperator'], firstMutant: 0, firstSite: 0 });
     expect(out.code!.match(/var __tzap=/g)).toHaveLength(2);
   });
+  it('reads a script tag whose attributes hold a `>`', () => {
+    const src = '<script setup lang="ts" generic="T extends Record<string, number>">\nconst x = 1 + 2;\n</script>\n';
+    const out = instrument({ file: 'C.vue', source: src, mutators: ['ArithmeticOperator'], firstMutant: 0, firstSite: 0 });
+    expect(out.errors).toEqual([]);
+    expect(out.mutants.map((m) => `${m.location.start.line}:${m.location.start.column} ${m.replacement}`)).toEqual(['2:11 1 - 2']);
+  });
 });
 
 describe('reductions', () => {
@@ -348,10 +354,10 @@ describe('reductions', () => {
   it('equivalence drops mutants that compile to another mutant or to the original', () => {
     const out = instrument({ file: 'a.ts', source: src, reduce: { equivalence: true }, firstMutant: 0, firstSite: 0 });
     // `if (false) clearTimeout(t)` is the same program as removing the call.
-    const dup = out.mutants.filter((m) => m.ignoredBy === 'duplicate');
-    expect(dup.map((m) => `${m.location.start.line} ${m.mutatorName}`)).toContain('2 CallExpression');
     // Nothing else is merged: every other mutant compiles to a distinct program.
-    expect(out.mutants.filter((m) => m.ignoredBy === 'equivalent')).toEqual([]);
+    expect(out.mutants.filter((m) => m.ignoredBy).map((m) => [m.ignoredBy, m.location.start.line, m.mutatorName, m.description])).toEqual([
+      ['duplicate', 2, 'CallExpression', 'compiles to the same program as another mutant (ConditionalExpression replacing t !== undefined)'],
+    ]);
   });
   it('FunctionBody is outside the default set and empties whole functions', () => {
     expect(instrument({ file: 'a.ts', source: src, firstMutant: 0, firstSite: 0 }).mutants.some((m) => m.mutatorName === 'FunctionBody')).toBe(false);

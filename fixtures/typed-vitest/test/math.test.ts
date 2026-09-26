@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { double, steps, sumSquares } from '../src/math';
+import { double, label, steps, sumSquares } from '../src/math';
 
 describe('math', () => {
   it('doubles', () => {
@@ -7,6 +7,9 @@ describe('math', () => {
   });
   it('sums squares', () => {
     expect(sumSquares([1, 2, 3])).toBe(14);
+  });
+  it('labels', () => {
+    expect(label(3).length).toBe(2);
   });
   it('steps', () => {
     expect(steps[0]!(1)).toBe(2);

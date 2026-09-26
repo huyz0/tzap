@@ -7,7 +7,7 @@ export {
   returningBodyRule,
   requiredPropertiesRule,
   usedKeysRule,
-  calledArrowRule,
+  typedArrowRule,
   declaredReturnArrowRule,
   nullableReceiverRule,
   nullishToAndRule,

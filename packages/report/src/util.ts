@@ -10,6 +10,9 @@ export interface ReportContext {
 }
 
 /** Mutants in report order, independent of the order the engine happened to produce them in. */
+/** Score colours, as the mutation-testing-elements viewer draws them: good from 80%, poor below 60%. */
+export const SCORE_THRESHOLDS = { high: 80, low: 60 } as const;
+
 export function sorted(mutants: readonly MutantResult[], status?: MutantStatus): MutantResult[] {
   return mutants.filter((m) => status === undefined || m.status === status).sort(compareMutants);
 }
