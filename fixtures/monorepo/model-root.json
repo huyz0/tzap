@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "root": ".",
+  "packages": [
+    { "id": "monorepo", "root": ".", "sources": ["packages/*/src/**/*.ts"], "runner": { "kind": "vitest", "config": "vitest.config.ts" } }
+  ]
+}

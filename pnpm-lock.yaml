@@ -24,6 +24,20 @@ importers:
         specifier: 5.0.2
         version: 5.0.2(@types/node@24.13.6)(vite@8.3.1(@types/node@24.13.6)(yaml@2.9.1))
 
+  fixtures/monorepo: {}
+
+  fixtures/monorepo/packages/app:
+    dependencies:
+      '@mono/lib':
+        specifier: workspace:*
+        version: link:../lib
+    devDependencies:
+      vitest:
+        specifier: 5.0.2
+        version: 5.0.2(@types/node@24.13.6)(vite@8.3.1(@types/node@24.13.6)(yaml@2.9.1))
+
+  fixtures/monorepo/packages/lib: {}
+
   fixtures/sample-jest:
     devDependencies:
       '@babel/core':
@@ -45,8 +59,19 @@ importers:
         specifier: 30.5.2
         version: 30.5.2(@types/node@24.13.6)(supports-color@8.1.1)
 
+  fixtures/sample-node: {}
+
   fixtures/sample-vitest:
     devDependencies:
+      vitest:
+        specifier: 5.0.2
+        version: 5.0.2(@types/node@24.13.6)(vite@8.3.1(@types/node@24.13.6)(yaml@2.9.1))
+
+  fixtures/typed-vitest:
+    devDependencies:
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
       vitest:
         specifier: 5.0.2
         version: 5.0.2(@types/node@24.13.6)(vite@8.3.1(@types/node@24.13.6)(yaml@2.9.1))
@@ -162,6 +187,25 @@ importers:
         version: 5.0.2(@types/node@24.13.6)(vite@8.3.1(@types/node@24.13.6)(yaml@2.9.1))
 
   packages/runtime: {}
+
+  packages/typecheck:
+    dependencies:
+      '@tzap/instrument':
+        specifier: workspace:*
+        version: link:../instrument
+      '@tzap/model':
+        specifier: workspace:*
+        version: link:../model
+    devDependencies:
+      '@tzap/core':
+        specifier: workspace:*
+        version: link:../core
+      '@tzap/runner-vitest':
+        specifier: workspace:*
+        version: link:../runner-vitest
+      vitest:
+        specifier: 5.0.2
+        version: 5.0.2(@types/node@24.13.6)(vite@8.3.1(@types/node@24.13.6)(yaml@2.9.1))
 
   packages/tzap:
     dependencies:
@@ -3080,6 +3124,11 @@ packages:
   typed-rest-client@2.3.1:
     resolution: {integrity: sha512-k4kX5Up6qA68D0Cby2AK+6+vM5k3qTxe+/3FqhnHRExjY5cfbOnzjQZbP/LXleF8hVoDvDqxlgk9KK83HoBZlQ==}
     engines: {node: '>= 16.0.0'}
+
+  typescript@6.0.3:
+    resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
+    engines: {node: '>=14.17'}
+    hasBin: true
 
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
@@ -6358,6 +6407,8 @@ snapshots:
       qs: 6.15.1
       tunnel: 0.0.6
       underscore: 1.13.8
+
+  typescript@6.0.3: {}
 
   typescript@7.0.2:
     optionalDependencies:

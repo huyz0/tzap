@@ -1,0 +1,8 @@
+{
+  "name": "@mono/app",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "vitest run" },
+  "dependencies": { "@mono/lib": "workspace:*" },
+  "devDependencies": { "vitest": "5.0.2" }
+}

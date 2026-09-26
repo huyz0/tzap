@@ -1,0 +1,52 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [22, 24, 26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm check:boundaries
+      - run: pnpm test
+      - name: Pack and run from the tarball
+        shell: bash
+        run: node scripts/pack-smoke.mjs
+
+  mutation:
+    # tzap on its own pull requests: the changed lines only, annotated on the diff.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Mutation test the diff
+        run: node packages/tzap/dist/bin.js run --from origin/${{ github.base_ref }} --to HEAD -r github,markdown -o reports/tzap
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tzap-report
+          path: reports/tzap

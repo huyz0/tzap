@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "root": ".",
+  "packages": [
+    { "id": "@mono/app", "root": "packages/app", "sources": ["src/**/*.ts"], "runner": { "kind": "vitest" } },
+    { "id": "@mono/lib", "root": "packages/lib", "sources": ["src/**/*.ts"], "tests": [] }
+  ]
+}

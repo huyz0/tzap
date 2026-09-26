@@ -323,6 +323,27 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
     }
     const closures = new Map(green.map((t) => [t.key, t.closure!]));
 
+    // A workspace package the tests import but whose source they never reach is almost always
+    // being resolved to its built output: every mutant in it would look uncovered.
+    {
+      const reachedFiles = new Set<string>();
+      for (const d of placed) {
+        if (green.some((t) => t.hits.has(d.site)) || staticSites.has(d.site)) reachedFiles.add(d.file);
+      }
+      const imported = new Set<string>();
+      for (const t of green) for (const p of graph.closure(path.resolve(root, t.file)).packages) imported.add(p);
+      for (const pkg of model.packages) {
+        if (!imported.has(pkg.id)) continue;
+        const own = placed.filter((d) => d.file.startsWith(`${relativeTo(root, path.resolve(root, pkg.root))}/`));
+        if (own.length > 0 && !own.some((d) => reachedFiles.has(d.file))) {
+          emit({
+            type: 'warning',
+            message: `tests import ${pkg.id} but never reach its source: they probably load its built output (check its package.json "exports"/"main", or alias it to src/ in the Vitest config); its ${own.length} mutants will be reported uncovered`,
+          });
+        }
+      }
+    }
+
     const siteTests = new Map<number, TestRecord[]>();
     for (const t of green) {
       for (const site of t.hits.keys()) {

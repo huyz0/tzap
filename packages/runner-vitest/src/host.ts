@@ -5,7 +5,7 @@
  * that reliably stops synchronous JavaScript.
  */
 import { createRequire } from 'node:module';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { FileOutcome, HostRequest, HostResponse, RunRequest, RunResult, SessionOptions, TestOutcome } from '@tzap/protocol';
@@ -85,10 +85,16 @@ async function init(o: SessionOptions): Promise<void> {
   const plugin = {
     name: 'tzap:instrument',
     enforce: 'pre' as const,
-    config(cfg: { test?: { setupFiles?: string | string[] } }) {
+    config(cfg: { root?: string; test?: { setupFiles?: string | string[]; projects?: unknown[]; fsModuleCache?: boolean } }) {
       cfg.test ??= {};
       const s = cfg.test.setupFiles;
       cfg.test.setupFiles = [shim, ...(s === undefined ? [] : Array.isArray(s) ? s : [s])];
+      // Instrumented code must never reach Vitest's persistent transform cache, where a later
+      // ordinary run could find it.
+      cfg.test.fsModuleCache = false;
+      // Projects have their own Vite servers and do not inherit the root's plugins: give each
+      // one this plugin, so its modules are instrumented and its tests get the setup file.
+      if (Array.isArray(cfg.test.projects)) cfg.test.projects = expandProjects(cfg.test.projects, cfg.root ? path.resolve(pkgRoot, cfg.root) : pkgRoot, plugin);
     },
     load(id: string) {
       const q = id.indexOf('?');
@@ -124,6 +130,75 @@ async function init(o: SessionOptions): Promise<void> {
   (channel as unknown as { unref?: () => void }).unref?.();
 
   send({ type: 'ready', runnerVersion: vitestPkg.version });
+}
+
+const CONFIG_NAMES = ['vitest.config', 'vite.config'].flatMap((b) => ['ts', 'mts', 'cts', 'js', 'mjs', 'cjs'].map((e) => `${b}.${e}`));
+
+function findConfig(dir: string): string | undefined {
+  for (const name of CONFIG_NAMES) {
+    const p = path.join(dir, name);
+    if (existsSync(p)) return p;
+  }
+  return undefined;
+}
+
+/** Minimal glob for project entries: `*` within one path segment, as Vitest's own examples use. */
+function expandGlob(root: string, pattern: string): string[] {
+  const parts = pattern.replace(/\\/g, '/').split('/').filter((p) => p && p !== '.');
+  let current = [root];
+  for (const part of parts) {
+    const next: string[] = [];
+    const escaped = part.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]');
+    const re = new RegExp(`^${escaped}$`);
+    for (const dir of current) {
+      if (!part.includes('*') && !part.includes('?')) {
+        const p = path.join(dir, part);
+        if (existsSync(p)) next.push(p);
+        continue;
+      }
+      let entries: string[] = [];
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        entries = [];
+      }
+      for (const e of entries) if (e !== 'node_modules' && re.test(e)) next.push(path.join(dir, e));
+    }
+    current = next;
+  }
+  return current;
+}
+
+/**
+ * Rewrites `test.projects` so every project carries tzap's plugin. A string entry (a directory or
+ * config-file glob) becomes `{ extends: <its config>, test: { root: <its dir> }, plugins: [tzap] }`;
+ * an inline object gains the plugin.
+ */
+function expandProjects(projects: unknown[], root: string, plugin: object): unknown[] {
+  const out: unknown[] = [];
+  for (const entry of projects) {
+    if (typeof entry === 'string') {
+      for (const target of expandGlob(root, entry)) {
+        let dir = target;
+        let config: string | undefined;
+        try {
+          if (statSync(target).isFile()) {
+            config = target;
+            dir = path.dirname(target);
+          } else config = findConfig(target);
+        } catch {
+          continue;
+        }
+        out.push(config ? { extends: config, test: { root: dir }, plugins: [plugin] } : { test: { root: dir }, plugins: [plugin] });
+      }
+    } else if (entry && typeof entry === 'object') {
+      const e = entry as { plugins?: unknown[] };
+      out.push({ ...e, plugins: [...(e.plugins ?? []), plugin] });
+    } else {
+      out.push(entry);
+    }
+  }
+  return out;
 }
 
 function sameHits(a: Array<[number, number]>, b: Array<[number, number]>): boolean {

@@ -197,7 +197,11 @@ const configRe = (base: string) => new RegExp(`^${base.replace(/\./g, '\\.')}\\.
 function runnerVersion(name: string, pkgDir: string): string | undefined {
   const req = createRequire(path.join(pkgDir, 'package.json'));
   try {
-    const v = readJson(req.resolve(`${name}/package.json`))?.version;
+    const found = req.resolve(`${name}/package.json`);
+    // Only an install in a node_modules above the package is the project's own; a global or
+    // host-process path is not what the project's test command would run.
+    const within = (p: string) => path.resolve(pkgDir).toLowerCase().startsWith(path.dirname(p.slice(0, p.toLowerCase().lastIndexOf(`${path.sep}node_modules${path.sep}`) + 1)).toLowerCase());
+    const v = within(found) ? readJson(found)?.version : undefined;
     if (typeof v === 'string') return v;
   } catch {
     // `package.json` may not be exported; fall back to walking node_modules directories.
@@ -335,6 +339,21 @@ async function describePackage(
   return out;
 }
 
+/** A root Vitest config that declares `projects` (Vitest 3+) or a legacy workspace file. */
+function rootProjectsConfig(dir: string): string | undefined {
+  for (const base of ['vitest.config', 'vite.config']) {
+    for (const ext of ['ts', 'mts', 'cts', 'js', 'mjs', 'cjs']) {
+      const f = path.join(dir, `${base}.${ext}`);
+      try {
+        if (/\bprojects\s*:|\bworkspace\s*:/.test(readFileSync(f, 'utf8'))) return f;
+      } catch {
+        // not there
+      }
+    }
+  }
+  return undefined;
+}
+
 function applyFilter(packages: PackageModel[], filter: string[], rootDir: string, cwd: string, notes: string[]): PackageModel[] {
   const wanted = new Set<string>();
   for (const f of filter) {
@@ -396,6 +415,21 @@ export async function discover(opts: DiscoverOptions): Promise<Discovery> {
       }
       packages.push(await describePackage(rootDir, dir, pkg, root.pkg, dir !== rootDir, notes));
     }
+  }
+
+  // One Vitest config at the root that lists the packages as projects runs every package's
+  // tests: model it as one package owning every member's sources, so one session runs them all
+  // and a test anywhere can kill a mutant anywhere.
+  const rootVitest = root.kind !== 'single' ? rootProjectsConfig(rootDir) : undefined;
+  if (rootVitest && !opts.filter?.length) {
+    const prefix = (p: PackageModel, g: string) => (p.root === '.' ? g : `${p.root}/${g}`);
+    const sources = packages.flatMap((p) => p.sources.map((g) => prefix(p, g)));
+    const exclude = packages.flatMap((p) => (p.exclude ?? []).map((g) => prefix(p, g)));
+    const version = runnerVersion('vitest', rootDir);
+    const id = typeof root.pkg?.name === 'string' ? root.pkg.name : 'root';
+    notes.push(`${rel(rootDir, rootVitest)} lists Vitest projects: one run at the root covers ${packages.length} packages`);
+    packages.length = 0;
+    packages.push({ id, root: '.', sources, ...(exclude.length ? { exclude } : {}), runner: { kind: 'vitest', config: rel(rootDir, rootVitest), ...(version ? { version } : {}) } });
   }
 
   packages.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));

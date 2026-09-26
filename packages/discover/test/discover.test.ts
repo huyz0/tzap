@@ -146,6 +146,19 @@ describe('discover', () => {
     expect(notes.some((n) => /is not one of its packages/.test(n))).toBe(true);
   });
 
+  it('a root Vitest config listing projects becomes one package owning every member', async () => {
+    const dir = fixture('pnpm-ws', { 'node_modules/vitest': '5.0.2' });
+    writeFileSync(path.join(dir, 'vitest.config.ts'), "export default { test: { projects: ['packages/*'] } };\n");
+    const { model, notes } = await discover({ cwd: dir });
+    expect(model.packages).toHaveLength(1);
+    const [only] = model.packages;
+    expect(only!.root).toBe('.');
+    expect(only!.runner).toEqual({ kind: 'vitest', config: 'vitest.config.ts', version: '5.0.2' });
+    expect(only!.sources).toContain('packages/app/src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}');
+    expect(only!.sources).toContain('packages/lib/src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}');
+    expect(notes.some((n) => n.includes('lists Vitest projects'))).toBe(true);
+  });
+
   it('fails clearly when there is no package.json at all', async () => {
     const base = mkdtempSync(path.join(tmpdir(), 'tzap-discover-empty-'));
     temps.push(base);
