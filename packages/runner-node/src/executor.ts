@@ -145,10 +145,6 @@ export class Executor {
   private state: RunState | undefined;
   readonly allFiles: string[];
 
-  listFiles(): string[] {
-    return this.allFiles;
-  }
-
   constructor(private readonly o: ExecutorOptions) {
     this.pkgRoot = o.pkgRoot;
     this.testTimeout = o.testTimeout ?? DEFAULT_TEST_TIMEOUT;
@@ -181,6 +177,11 @@ export class Executor {
       sentinel: () => this.registerSentinel(),
     };
     this.installHooks();
+  }
+
+  /** The test files the runner would run, in its order. */
+  listFiles(): string[] {
+    return this.allFiles;
   }
 
   // --- module hooks --------------------------------------------------------------------------

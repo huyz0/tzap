@@ -100,10 +100,6 @@ export class Executor {
   readonly rt: TzapRuntime;
   readonly version: string;
   readonly allFiles: string[];
-
-  listFiles(): string[] {
-    return this.allFiles;
-  }
   running = false;
   private readonly pkgRoot: string;
   private readonly cli: MochaCli;
@@ -131,6 +127,11 @@ export class Executor {
     this.cli = mocha.cli;
     this.options = mocha.options;
     this.allFiles = mocha.files;
+  }
+
+  /** The test files the runner would run, in its order. */
+  listFiles(): string[] {
+    return this.allFiles;
   }
 
   // --- module hooks --------------------------------------------------------------------------
