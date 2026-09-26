@@ -57,6 +57,20 @@ test timeout (5 s in Vitest by default); a project with many such mutants runs f
 lower `testTimeout`. A mutant that blocks synchronously outside instrumented code is caught by a
 wall-clock backstop that restarts the runner.
 
+## Worker threads
+
+Where a Vitest config sets no `pool`, `execArgv` or `projects`, tzap runs the tests in worker
+threads rather than Vitest's default forked processes: a thread starts several times faster,
+and tzap starts one for every test file of every isolated run. A configured pool is always kept.
+
+Some suites cannot run in threads: `process.chdir`, some native addons, code that relies on
+being the main thread. If anything fails in tzap's baseline run in threads — a red test, a test
+file that does not load, an unhandled error, a crash — tzap says so (`the baseline is not clean
+in worker threads; using the project's own pool`) and runs that package in Vitest's default
+pool instead. The check is the baseline: a suite that passes in threads but depends on a
+process-only behaviour only when a mutant is active would not be caught by it. If you suspect
+that, or to skip the attempt, set `pool: 'forks'` in the config or pass `--keep-pool`.
+
 ## Snapshots
 
 tzap never writes snapshots: a mutant that changes a snapshot fails the assertion and is

@@ -5,12 +5,12 @@
     "logicalCpus": 20,
     "memoryGB": 64,
     "node": "v26.7.0",
-    "tzapCommit": "9f9af41",
+    "tzapCommit": "a1a4249",
     "tzapVersion": "0.1.0",
-    "date": "2026-09-26T05:58:04.930Z",
-    "tzapBuild": "597b87be3e0ae39d",
-    "loadBeforeSetup": 23.3,
-    "loadAfter": 23.4
+    "date": "2026-09-26T07:33:23.036Z",
+    "tzapBuild": "84d7ec89e2cd4a94",
+    "loadBeforeSetup": 8.9,
+    "loadAfter": 20.4
   },
   "config": {
     "runs": 5,
@@ -43,93 +43,30 @@
     "installMs": {},
     "workDir": "C:\\Users\\tuong\\AppData\\Local\\Temp\\tzap-bench",
     "strykerConcurrency": 10,
-    "strykerConcurrencySource": "set with --stryker-concurrency"
+    "strykerConcurrencySource": "fastest of 1, 4, 10, one probe run each, see S1"
   },
   "scenarios": {
     "S1": {
       "title": "Full run, one Vitest package, cold",
-      "load": 19.1,
+      "load": 11.8,
       "series": [
         {
           "label": "tzap warm (default workers)",
           "tool": "tzap",
           "runs": [
             {
-              "ms": 7914,
+              "ms": 3630,
               "phases": {
-                "coverage": 1647,
-                "execute": 2661,
-                "instrument": 102,
-                "isolated": 3038
-              },
-              "inventory": 1495,
-              "executed": 1153,
-              "cached": 0,
-              "static": 69,
-              "testExecutions": 1731,
-              "verdicts": {
-                "Killed": 653,
-                "Survived": 500,
-                "NoCoverage": 323,
-                "Timeout": 19
-              },
-              "redTests": 0
-            },
-            {
-              "ms": 8779,
-              "phases": {
-                "coverage": 2774,
-                "execute": 2597,
-                "instrument": 115,
-                "isolated": 3045
-              },
-              "inventory": 1495,
-              "executed": 1153,
-              "cached": 0,
-              "static": 69,
-              "testExecutions": 1731,
-              "verdicts": {
-                "Killed": 653,
-                "Survived": 500,
-                "NoCoverage": 323,
-                "Timeout": 19
-              },
-              "redTests": 0
-            },
-            {
-              "ms": 6785,
-              "phases": {
-                "coverage": 1623,
-                "execute": 2387,
-                "instrument": 98,
-                "isolated": 2454
-              },
-              "inventory": 1495,
-              "executed": 1153,
-              "cached": 0,
-              "static": 69,
-              "testExecutions": 1728,
-              "verdicts": {
-                "Killed": 653,
-                "Survived": 500,
-                "NoCoverage": 323,
-                "Timeout": 19
-              },
-              "redTests": 0
-            },
-            {
-              "ms": 8180,
-              "phases": {
-                "coverage": 2800,
-                "execute": 1713,
+                "coverage": 872,
+                "execute": 920,
                 "instrument": 99,
-                "isolated": 3225
+                "isolated": 1511
               },
               "inventory": 1495,
               "executed": 1153,
               "cached": 0,
               "static": 69,
-              "testExecutions": 1728,
+              "testExecutions": 1603,
               "verdicts": {
                 "Killed": 653,
                 "Survived": 500,
@@ -139,18 +76,81 @@
               "redTests": 0
             },
             {
-              "ms": 8867,
+              "ms": 4405,
               "phases": {
-                "coverage": 1930,
-                "execute": 1563,
-                "instrument": 100,
-                "isolated": 5044
+                "coverage": 1057,
+                "execute": 1094,
+                "instrument": 123,
+                "isolated": 1869
               },
               "inventory": 1495,
               "executed": 1153,
               "cached": 0,
               "static": 69,
-              "testExecutions": 1727,
+              "testExecutions": 1600,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 4199,
+              "phases": {
+                "coverage": 1054,
+                "execute": 1041,
+                "instrument": 111,
+                "isolated": 1742
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1603,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 4130,
+              "phases": {
+                "coverage": 1040,
+                "execute": 1018,
+                "instrument": 122,
+                "isolated": 1686
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1600,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 3943,
+              "phases": {
+                "coverage": 938,
+                "execute": 981,
+                "instrument": 107,
+                "isolated": 1677
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1600,
               "verdicts": {
                 "Killed": 653,
                 "Survived": 500,
@@ -166,11 +166,11 @@
           "tool": "stryker",
           "runs": [
             {
-              "ms": 26702,
+              "ms": 29405,
               "phases": {
-                "startup_instrument": 950,
-                "dryRun": 4036,
-                "mutate": 20560
+                "startup_instrument": 892,
+                "dryRun": 4079,
+                "mutate": 23554
               },
               "inventory": 1495,
               "executed": 1154,
@@ -185,11 +185,11 @@
               }
             },
             {
-              "ms": 26040,
+              "ms": 30728,
               "phases": {
-                "startup_instrument": 880,
-                "dryRun": 4615,
-                "mutate": 19540
+                "startup_instrument": 927,
+                "dryRun": 5344,
+                "mutate": 23571
               },
               "inventory": 1495,
               "executed": 1154,
@@ -204,11 +204,11 @@
               }
             },
             {
-              "ms": 24911,
+              "ms": 28236,
               "phases": {
-                "startup_instrument": 864,
-                "dryRun": 3782,
-                "mutate": 19007
+                "startup_instrument": 935,
+                "dryRun": 3985,
+                "mutate": 22440
               },
               "inventory": 1495,
               "executed": 1154,
@@ -229,17 +229,17 @@
           "tool": "tzap-reference",
           "runs": [
             {
-              "ms": 136600,
+              "ms": 135520,
               "phases": {
-                "coverage": 1563,
-                "execute": 134560,
-                "instrument": 95
+                "coverage": 1158,
+                "execute": 133774,
+                "instrument": 104
               },
               "inventory": 1495,
               "executed": 1172,
               "cached": 0,
               "static": 69,
-              "testExecutions": 5860,
+              "testExecutions": 1782,
               "verdicts": {
                 "Killed": 651,
                 "Survived": 500,
@@ -249,6 +249,20 @@
               "redTests": 0
             }
           ]
+        }
+      ],
+      "strykerProbe": [
+        {
+          "concurrency": 1,
+          "ms": 125571
+        },
+        {
+          "concurrency": 4,
+          "ms": 40688
+        },
+        {
+          "concurrency": 10,
+          "ms": 23308
         }
       ],
       "parity": {
@@ -273,11 +287,461 @@
           "Timeout/Killed": 1,
           "Killed/Timeout": 3
         }
-      }
+      },
+      "scaling": [
+        {
+          "label": "tzap warm --workers 1",
+          "tool": "tzap",
+          "runs": [
+            {
+              "ms": 12958,
+              "phases": {
+                "coverage": 4659,
+                "execute": 6247,
+                "instrument": 116,
+                "isolated": 1697
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1602,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 12581,
+              "phases": {
+                "coverage": 4414,
+                "execute": 6088,
+                "instrument": 105,
+                "isolated": 1760
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1602,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 14099,
+              "phases": {
+                "coverage": 4388,
+                "execute": 6583,
+                "instrument": 97,
+                "isolated": 2541
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1603,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 13467,
+              "phases": {
+                "coverage": 4997,
+                "execute": 6144,
+                "instrument": 98,
+                "isolated": 1999
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1602,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 13320,
+              "phases": {
+                "coverage": 4582,
+                "execute": 6220,
+                "instrument": 105,
+                "isolated": 2057
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1601,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            }
+          ],
+          "workers": 1
+        },
+        {
+          "label": "tzap warm --workers 2",
+          "tool": "tzap",
+          "runs": [
+            {
+              "ms": 7520,
+              "phases": {
+                "coverage": 2321,
+                "execute": 3166,
+                "instrument": 97,
+                "isolated": 1728
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1599,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 7587,
+              "phases": {
+                "coverage": 2353,
+                "execute": 3076,
+                "instrument": 100,
+                "isolated": 1844
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1603,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 7816,
+              "phases": {
+                "coverage": 2593,
+                "execute": 3122,
+                "instrument": 100,
+                "isolated": 1789
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1602,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 8006,
+              "phases": {
+                "coverage": 2549,
+                "execute": 3121,
+                "instrument": 101,
+                "isolated": 2027
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1603,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 7860,
+              "phases": {
+                "coverage": 2375,
+                "execute": 3264,
+                "instrument": 116,
+                "isolated": 1823
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1603,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            }
+          ],
+          "workers": 2
+        },
+        {
+          "label": "tzap warm --workers 4",
+          "tool": "tzap",
+          "runs": [
+            {
+              "ms": 6453,
+              "phases": {
+                "coverage": 2058,
+                "execute": 2118,
+                "instrument": 98,
+                "isolated": 1900
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1602,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 7052,
+              "phases": {
+                "coverage": 1680,
+                "execute": 1750,
+                "instrument": 96,
+                "isolated": 3082
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1603,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 6390,
+              "phases": {
+                "coverage": 1818,
+                "execute": 1857,
+                "instrument": 131,
+                "isolated": 2096
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1597,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 5815,
+              "phases": {
+                "coverage": 1669,
+                "execute": 1816,
+                "instrument": 117,
+                "isolated": 1905
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1603,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 6434,
+              "phases": {
+                "coverage": 1556,
+                "execute": 1721,
+                "instrument": 97,
+                "isolated": 2418
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1600,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            }
+          ],
+          "workers": 4
+        },
+        {
+          "label": "tzap warm --workers 8",
+          "tool": "tzap",
+          "runs": [
+            {
+              "ms": 4805,
+              "phases": {
+                "coverage": 1488,
+                "execute": 1122,
+                "instrument": 106,
+                "isolated": 1611
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1603,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 4680,
+              "phases": {
+                "coverage": 1346,
+                "execute": 1144,
+                "instrument": 99,
+                "isolated": 1732
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1598,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 6484,
+              "phases": {
+                "coverage": 1768,
+                "execute": 1999,
+                "instrument": 107,
+                "isolated": 2114
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1599,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 5103,
+              "phases": {
+                "coverage": 1348,
+                "execute": 1434,
+                "instrument": 130,
+                "isolated": 1924
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1602,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 4576,
+              "phases": {
+                "coverage": 1312,
+                "execute": 1336,
+                "instrument": 101,
+                "isolated": 1607
+              },
+              "inventory": 1495,
+              "executed": 1153,
+              "cached": 0,
+              "static": 69,
+              "testExecutions": 1604,
+              "verdicts": {
+                "Killed": 653,
+                "Survived": 500,
+                "NoCoverage": 323,
+                "Timeout": 19
+              },
+              "redTests": 0
+            }
+          ],
+          "workers": 8
+        }
+      ]
     },
     "S3": {
       "title": "Diff run, synthetic 10-line PR, cold",
-      "load": 16.9,
+      "load": 34.2,
       "guard": {
         "changedLines": 10,
         "files": [
@@ -300,12 +764,12 @@
           "tool": "tzap",
           "runs": [
             {
-              "ms": 1466,
+              "ms": 1279,
               "phases": {
-                "coverage": 646,
-                "execute": 620,
-                "instrument": 8,
-                "isolated": 0
+                "coverage": 672,
+                "execute": 310,
+                "instrument": 16,
+                "isolated": 1
               },
               "inventory": 21,
               "executed": 19,
@@ -320,30 +784,10 @@
               "redTests": 0
             },
             {
-              "ms": 1723,
+              "ms": 866,
               "phases": {
-                "coverage": 665,
-                "execute": 670,
-                "instrument": 12,
-                "isolated": 0
-              },
-              "inventory": 21,
-              "executed": 19,
-              "cached": 0,
-              "static": 0,
-              "testExecutions": 25,
-              "verdicts": {
-                "Killed": 5,
-                "NoCoverage": 2,
-                "Survived": 14
-              },
-              "redTests": 0
-            },
-            {
-              "ms": 1484,
-              "phases": {
-                "coverage": 631,
-                "execute": 469,
+                "coverage": 433,
+                "execute": 222,
                 "instrument": 9,
                 "isolated": 0
               },
@@ -360,10 +804,10 @@
               "redTests": 0
             },
             {
-              "ms": 988,
+              "ms": 788,
               "phases": {
-                "coverage": 549,
-                "execute": 250,
+                "coverage": 394,
+                "execute": 199,
                 "instrument": 8,
                 "isolated": 0
               },
@@ -380,10 +824,30 @@
               "redTests": 0
             },
             {
-              "ms": 1188,
+              "ms": 774,
               "phases": {
-                "coverage": 592,
-                "execute": 402,
+                "coverage": 386,
+                "execute": 197,
+                "instrument": 8,
+                "isolated": 0
+              },
+              "inventory": 21,
+              "executed": 19,
+              "cached": 0,
+              "static": 0,
+              "testExecutions": 25,
+              "verdicts": {
+                "Killed": 5,
+                "NoCoverage": 2,
+                "Survived": 14
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 757,
+              "phases": {
+                "coverage": 381,
+                "execute": 189,
                 "instrument": 8,
                 "isolated": 0
               },
@@ -406,11 +870,11 @@
           "tool": "stryker",
           "runs": [
             {
-              "ms": 4993,
+              "ms": 4244,
               "phases": {
-                "startup_instrument": 891,
-                "dryRun": 340,
-                "mutate": 2200
+                "startup_instrument": 1095,
+                "dryRun": 477,
+                "mutate": 1360
               },
               "inventory": 17,
               "executed": 16,
@@ -424,11 +888,11 @@
               }
             },
             {
-              "ms": 4872,
+              "ms": 3528,
               "phases": {
-                "startup_instrument": 869,
-                "dryRun": 327,
-                "mutate": 2657
+                "startup_instrument": 817,
+                "dryRun": 438,
+                "mutate": 1294
               },
               "inventory": 17,
               "executed": 16,
@@ -437,16 +901,16 @@
               "testExecutions": 22,
               "verdicts": {
                 "NoCoverage": 1,
-                "Survived": 14,
-                "Killed": 2
+                "Killed": 2,
+                "Survived": 14
               }
             },
             {
-              "ms": 4546,
+              "ms": 3138,
               "phases": {
-                "startup_instrument": 847,
-                "dryRun": 350,
-                "mutate": 1932
+                "startup_instrument": 747,
+                "dryRun": 367,
+                "mutate": 1176
               },
               "inventory": 17,
               "executed": 16,
@@ -480,7 +944,7 @@
     },
     "S4": {
       "title": "Diff run, same PR, warm cache",
-      "load": 12.8,
+      "load": 21.5,
       "guard": {
         "changedLines": 10,
         "files": [
@@ -498,11 +962,11 @@
         "inventory": 1495
       },
       "prime": {
-        "ms": 1932,
+        "ms": 764,
         "phases": {
-          "coverage": 724,
-          "execute": 766,
-          "instrument": 9,
+          "coverage": 377,
+          "execute": 194,
+          "instrument": 8,
           "isolated": 0
         },
         "inventory": 21,
@@ -523,43 +987,9 @@
           "tool": "tzap",
           "runs": [
             {
-              "ms": 188,
-              "phases": {
-                "instrument": 9
-              },
-              "inventory": 21,
-              "executed": 0,
-              "cached": 21,
-              "static": 0,
-              "testExecutions": 0,
-              "verdicts": {
-                "Killed": 5,
-                "NoCoverage": 2,
-                "Survived": 14
-              },
-              "redTests": 0
-            },
-            {
-              "ms": 184,
+              "ms": 182,
               "phases": {
                 "instrument": 8
-              },
-              "inventory": 21,
-              "executed": 0,
-              "cached": 21,
-              "static": 0,
-              "testExecutions": 0,
-              "verdicts": {
-                "Killed": 5,
-                "NoCoverage": 2,
-                "Survived": 14
-              },
-              "redTests": 0
-            },
-            {
-              "ms": 187,
-              "phases": {
-                "instrument": 9
               },
               "inventory": 21,
               "executed": 0,
@@ -591,9 +1021,43 @@
               "redTests": 0
             },
             {
-              "ms": 360,
+              "ms": 188,
+              "phases": {
+                "instrument": 8
+              },
+              "inventory": 21,
+              "executed": 0,
+              "cached": 21,
+              "static": 0,
+              "testExecutions": 0,
+              "verdicts": {
+                "Killed": 5,
+                "NoCoverage": 2,
+                "Survived": 14
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 195,
               "phases": {
                 "instrument": 9
+              },
+              "inventory": 21,
+              "executed": 0,
+              "cached": 21,
+              "static": 0,
+              "testExecutions": 0,
+              "verdicts": {
+                "Killed": 5,
+                "NoCoverage": 2,
+                "Survived": 14
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 197,
+              "phases": {
+                "instrument": 8
               },
               "inventory": 21,
               "executed": 0,
@@ -616,21 +1080,21 @@
     },
     "S5": {
       "title": "Re-run with no changes, warm cache",
-      "load": 16.5,
+      "load": 15.2,
       "prime": {
         "tzap": {
-          "ms": 7199,
+          "ms": 3732,
           "phases": {
-            "coverage": 1904,
-            "execute": 1640,
-            "instrument": 102,
-            "isolated": 3323
+            "coverage": 911,
+            "execute": 925,
+            "instrument": 101,
+            "isolated": 1557
           },
           "inventory": 1495,
           "executed": 1153,
           "cached": 0,
           "static": 69,
-          "testExecutions": 1728,
+          "testExecutions": 1599,
           "verdicts": {
             "Killed": 653,
             "Survived": 500,
@@ -640,11 +1104,11 @@
           "redTests": 0
         },
         "stryker": {
-          "ms": 25059,
+          "ms": 24962,
           "phases": {
-            "startup_instrument": 844,
-            "dryRun": 3728,
-            "mutate": 19233
+            "startup_instrument": 860,
+            "dryRun": 3762,
+            "mutate": 19528
           },
           "inventory": 1495,
           "executed": 1154,
@@ -665,7 +1129,7 @@
           "tool": "tzap",
           "runs": [
             {
-              "ms": 292,
+              "ms": 392,
               "phases": {
                 "instrument": 101
               },
@@ -683,9 +1147,9 @@
               "redTests": 0
             },
             {
-              "ms": 289,
+              "ms": 291,
               "phases": {
-                "instrument": 99
+                "instrument": 101
               },
               "inventory": 1495,
               "executed": 0,
@@ -701,7 +1165,7 @@
               "redTests": 0
             },
             {
-              "ms": 304,
+              "ms": 319,
               "phases": {
                 "instrument": 103
               },
@@ -719,9 +1183,9 @@
               "redTests": 0
             },
             {
-              "ms": 295,
+              "ms": 476,
               "phases": {
-                "instrument": 101
+                "instrument": 121
               },
               "inventory": 1495,
               "executed": 0,
@@ -737,9 +1201,9 @@
               "redTests": 0
             },
             {
-              "ms": 290,
+              "ms": 553,
               "phases": {
-                "instrument": 99
+                "instrument": 108
               },
               "inventory": 1495,
               "executed": 0,
@@ -761,11 +1225,11 @@
           "tool": "stryker",
           "runs": [
             {
-              "ms": 6682,
+              "ms": 6691,
               "phases": {
-                "startup_instrument": 1007,
-                "dryRun": 3731,
-                "mutate": 877
+                "startup_instrument": 865,
+                "dryRun": 3743,
+                "mutate": 1231
               },
               "inventory": 1495,
               "executed": 0,
@@ -779,11 +1243,11 @@
               }
             },
             {
-              "ms": 8043,
+              "ms": 8286,
               "phases": {
-                "startup_instrument": 876,
-                "dryRun": 4280,
-                "mutate": 1664
+                "startup_instrument": 1034,
+                "dryRun": 4798,
+                "mutate": 944
               },
               "inventory": 1495,
               "executed": 0,
@@ -797,11 +1261,11 @@
               }
             },
             {
-              "ms": 7274,
+              "ms": 7786,
               "phases": {
-                "startup_instrument": 943,
-                "dryRun": 3850,
-                "mutate": 1349
+                "startup_instrument": 1063,
+                "dryRun": 3952,
+                "mutate": 1574
               },
               "inventory": 1495,
               "executed": 0,
@@ -820,7 +1284,7 @@
     },
     "S6": {
       "title": "Re-run after a one-line change, warm cache",
-      "load": 16.1,
+      "load": 26.6,
       "edit": {
         "file": "src/branching02.ts",
         "line": 5,
@@ -833,11 +1297,11 @@
           "tool": "tzap",
           "runs": [
             {
-              "ms": 3027,
+              "ms": 1835,
               "phases": {
-                "coverage": 2233,
-                "execute": 241,
-                "instrument": 98,
+                "coverage": 1096,
+                "execute": 204,
+                "instrument": 96,
                 "isolated": 0
               },
               "inventory": 1495,
@@ -854,11 +1318,11 @@
               "redTests": 0
             },
             {
-              "ms": 2455,
+              "ms": 1445,
               "phases": {
-                "coverage": 1665,
-                "execute": 479,
-                "instrument": 98,
+                "coverage": 926,
+                "execute": 198,
+                "instrument": 100,
                 "isolated": 0
               },
               "inventory": 1495,
@@ -875,11 +1339,11 @@
               "redTests": 0
             },
             {
-              "ms": 3178,
+              "ms": 2723,
               "phases": {
-                "coverage": 2276,
-                "execute": 535,
-                "instrument": 99,
+                "coverage": 1871,
+                "execute": 279,
+                "instrument": 96,
                 "isolated": 0
               },
               "inventory": 1495,
@@ -896,11 +1360,11 @@
               "redTests": 0
             },
             {
-              "ms": 2730,
+              "ms": 1788,
               "phases": {
-                "coverage": 2029,
-                "execute": 386,
-                "instrument": 97,
+                "coverage": 1188,
+                "execute": 203,
+                "instrument": 109,
                 "isolated": 0
               },
               "inventory": 1495,
@@ -917,11 +1381,11 @@
               "redTests": 0
             },
             {
-              "ms": 2980,
+              "ms": 1718,
               "phases": {
-                "coverage": 2016,
-                "execute": 421,
-                "instrument": 95,
+                "coverage": 1179,
+                "execute": 201,
+                "instrument": 102,
                 "isolated": 0
               },
               "inventory": 1495,
@@ -944,11 +1408,11 @@
           "tool": "stryker",
           "runs": [
             {
-              "ms": 7514,
+              "ms": 8767,
               "phases": {
-                "startup_instrument": 882,
-                "dryRun": 4215,
-                "mutate": 1380
+                "startup_instrument": 964,
+                "dryRun": 3924,
+                "mutate": 1694
               },
               "inventory": 1495,
               "executed": 0,
@@ -962,11 +1426,11 @@
               }
             },
             {
-              "ms": 6913,
+              "ms": 7103,
               "phases": {
-                "startup_instrument": 863,
-                "dryRun": 4201,
-                "mutate": 828
+                "startup_instrument": 885,
+                "dryRun": 3836,
+                "mutate": 1111
               },
               "inventory": 1495,
               "executed": 0,
@@ -980,11 +1444,11 @@
               }
             },
             {
-              "ms": 7511,
+              "ms": 9952,
               "phases": {
-                "startup_instrument": 935,
-                "dryRun": 4190,
-                "mutate": 1451
+                "startup_instrument": 1116,
+                "dryRun": 4175,
+                "mutate": 2270
               },
               "inventory": 1495,
               "executed": 0,
@@ -1003,25 +1467,25 @@
     },
     "S9": {
       "title": "Package with many static mutants, full run",
-      "load": 34.4,
+      "load": 24,
       "series": [
         {
           "label": "tzap warm",
           "tool": "tzap",
           "runs": [
             {
-              "ms": 18842,
+              "ms": 13999,
               "phases": {
-                "coverage": 1601,
-                "execute": 1030,
-                "instrument": 52,
-                "isolated": 15875
+                "coverage": 848,
+                "execute": 635,
+                "instrument": 51,
+                "isolated": 12167
               },
               "inventory": 1214,
               "executed": 1100,
               "cached": 0,
               "static": 831,
-              "testExecutions": 4649,
+              "testExecutions": 4422,
               "verdicts": {
                 "Killed": 550,
                 "Survived": 565,
@@ -1031,18 +1495,18 @@
               "redTests": 0
             },
             {
-              "ms": 18146,
+              "ms": 13102,
               "phases": {
-                "coverage": 809,
-                "execute": 811,
-                "instrument": 54,
-                "isolated": 16176
+                "coverage": 746,
+                "execute": 673,
+                "instrument": 51,
+                "isolated": 11353
               },
               "inventory": 1214,
               "executed": 1100,
               "cached": 0,
               "static": 831,
-              "testExecutions": 4649,
+              "testExecutions": 4422,
               "verdicts": {
                 "Killed": 550,
                 "Survived": 565,
@@ -1052,18 +1516,18 @@
               "redTests": 0
             },
             {
-              "ms": 17801,
+              "ms": 12781,
               "phases": {
-                "coverage": 794,
-                "execute": 843,
-                "instrument": 53,
-                "isolated": 15831
+                "coverage": 617,
+                "execute": 539,
+                "instrument": 48,
+                "isolated": 11324
               },
               "inventory": 1214,
               "executed": 1100,
               "cached": 0,
               "static": 831,
-              "testExecutions": 4649,
+              "testExecutions": 4422,
               "verdicts": {
                 "Killed": 550,
                 "Survived": 565,
@@ -1073,39 +1537,39 @@
               "redTests": 0
             },
             {
-              "ms": 26541,
+              "ms": 12803,
               "phases": {
-                "coverage": 1041,
-                "execute": 997,
+                "coverage": 654,
+                "execute": 592,
+                "instrument": 78,
+                "isolated": 11220
+              },
+              "inventory": 1214,
+              "executed": 1100,
+              "cached": 0,
+              "static": 831,
+              "testExecutions": 4422,
+              "verdicts": {
+                "Killed": 550,
+                "Survived": 565,
+                "NoCoverage": 90,
+                "Timeout": 9
+              },
+              "redTests": 0
+            },
+            {
+              "ms": 13070,
+              "phases": {
+                "coverage": 719,
+                "execute": 663,
                 "instrument": 50,
-                "isolated": 24148
+                "isolated": 11370
               },
               "inventory": 1214,
               "executed": 1100,
               "cached": 0,
               "static": 831,
-              "testExecutions": 4651,
-              "verdicts": {
-                "Killed": 550,
-                "Survived": 565,
-                "NoCoverage": 90,
-                "Timeout": 9
-              },
-              "redTests": 0
-            },
-            {
-              "ms": 26847,
-              "phases": {
-                "coverage": 1547,
-                "execute": 1268,
-                "instrument": 52,
-                "isolated": 23468
-              },
-              "inventory": 1214,
-              "executed": 1100,
-              "cached": 0,
-              "static": 831,
-              "testExecutions": 4651,
+              "testExecutions": 4422,
               "verdicts": {
                 "Killed": 550,
                 "Survived": 565,
@@ -1121,11 +1585,11 @@
           "tool": "stryker",
           "runs": [
             {
-              "ms": 22768,
+              "ms": 21825,
               "phases": {
-                "startup_instrument": 825,
-                "dryRun": 2087,
-                "mutate": 19005
+                "startup_instrument": 922,
+                "dryRun": 2135,
+                "mutate": 17573
               },
               "inventory": 1214,
               "executed": 1100,
@@ -1140,11 +1604,11 @@
               }
             },
             {
-              "ms": 23431,
+              "ms": 20865,
               "phases": {
-                "startup_instrument": 837,
-                "dryRun": 2229,
-                "mutate": 19431
+                "startup_instrument": 818,
+                "dryRun": 1996,
+                "mutate": 17126
               },
               "inventory": 1214,
               "executed": 1100,
@@ -1159,11 +1623,11 @@
               }
             },
             {
-              "ms": 23656,
+              "ms": 20938,
               "phases": {
-                "startup_instrument": 913,
-                "dryRun": 2195,
-                "mutate": 19686
+                "startup_instrument": 824,
+                "dryRun": 1972,
+                "mutate": 17277
               },
               "inventory": 1214,
               "executed": 1100,

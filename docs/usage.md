@@ -116,6 +116,8 @@ npx tzap run -r console,html,json -o reports/tzap
     --mutators LIST       only these mutators (see mutators.md)
     --no-arid             also mutate logging calls (see mutators.md)
     --workers N           the test runner's worker count
+    --keep-pool           run Vitest in its default pool (forks) even where the config leaves
+                          the pool unset; see troubleshooting.md, "Worker threads"
     --cache-dir DIR       reuse verdicts that are provably still valid
     --engine reference    one fresh process per mutant: slow, and the correctness oracle
     --dry-run             print what would be analysed, and stop
