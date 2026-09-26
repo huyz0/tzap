@@ -12,7 +12,7 @@ breaking change for each surface:
 | Mutator names | renaming a mutator | major: names key caches and the StrykerJS comparison |
 | Mutant ids | any change to how an id is computed | minor, and the cache is invalidated by the tzap version it records |
 | Cache format | any change | not breaking: the cache records the tzap version that wrote it and ignores itself under another |
-| Runner SPI (`@tzap/protocol`) | any change | internal; runners ship inside the `tzap` package |
+| Runner SPI (`@tzap/protocol`) | any change | internal; runners ship inside the `@huyz0/tzap` package |
 
 ## Fixes that change verdicts
 

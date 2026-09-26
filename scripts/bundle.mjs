@@ -1,4 +1,5 @@
-// Builds the one package tzap publishes: `tzap`, with every internal @tzap/* package bundled in
+// Builds the one package tzap publishes: `@huyz0/tzap` (the unscoped `tzap` on npm is another
+// project), whose command is `tzap`, with every internal @tzap/* package bundled in
 // and every third-party dependency left as a real dependency. The internal packages exist to
 // enforce boundaries in this repository, not to be installed one by one.
 //
@@ -93,16 +94,20 @@ if (Object.keys(cjsEntryPoints).length) {
 
 const cli = manifests.tzap;
 const pkg = {
-  name: 'tzap',
+  name: '@huyz0/tzap',
   version: cli.version,
   description: cli.description,
   license: cli.license,
   type: 'module',
-  bin: { tzap: './dist/bin.js' },
+  bin: { tzap: 'dist/bin.js' },
   exports: { '.': './dist/cli.js' },
   files: ['dist', 'README.md', 'LICENSE'],
   engines: cli.engines,
   repository: { type: 'git', url: 'git+https://github.com/huyz0/tzap.git' },
+  homepage: 'https://github.com/huyz0/tzap#readme',
+  bugs: 'https://github.com/huyz0/tzap/issues',
+  // A scoped package is private unless published public.
+  publishConfig: { access: 'public' },
   keywords: ['mutation testing', 'testing', 'typescript', 'vitest', 'jest', 'stryker'],
   dependencies: Object.fromEntries(Object.entries(dependencies).sort(([a], [b]) => (a < b ? -1 : 1))),
 };

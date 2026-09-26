@@ -40,7 +40,7 @@ reason is the runtime, not taste.
 
 ## Package layout
 
-A pnpm workspace. Published as **one npm package, `tzap`**, the CLI, with every internal package
+A pnpm workspace. Published as **one npm package, `@huyz0/tzap`** (the command `tzap`), with every internal package
 bundled in (scripts/bundle.mjs); the internal packages exist to enforce boundaries, not to be
 installed separately. In dependency order — nothing depends on anything below it, and
 scripts/check-boundaries.mjs walks every import to assert it:

@@ -12,7 +12,7 @@ StrykerJS as the correctness oracle, every speed feature checked against a slow 
 engine, every number reproducible. See [docs/status.md](docs/status.md) for exactly what exists.
 
 ```bash
-npm install --save-dev tzap                   # not on npm yet: see docs/usage.md#install
+npm install --save-dev @huyz0/tzap@next      # the command is tzap; see docs/usage.md#install
 npx tzap run                                  # the whole package
 npx tzap run --from origin/main --to -Local-  # only the lines this branch changed
 ```

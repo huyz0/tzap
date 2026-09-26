@@ -6,17 +6,22 @@ Each surviving mutant is a specific line where a bug could hide from your tests.
 
 ## Install
 
-tzap is not on the npm registry yet. Until it is, build the package from this repository and
-install the tarball:
+```bash
+npm install --save-dev @huyz0/tzap@next
+```
+
+The package is `@huyz0/tzap` (the name `tzap` on npm belongs to another project); the command it
+installs is `tzap`. Releases are published under the `next` tag first, and move to `latest` once
+they have been tried on real projects.
+
+To run an unreleased build, pack this repository and install the tarball:
 
 ```bash
 git clone https://github.com/huyz0/tzap && cd tzap
 pnpm install && pnpm build && pnpm bundle   # writes dist-npm/tzap
-(cd dist-npm/tzap && npm pack)               # writes tzap-<version>.tgz
-cd /path/to/your/project && npm install --save-dev /path/to/tzap/dist-npm/tzap/tzap-*.tgz
+(cd dist-npm/tzap && npm pack)               # writes huyz0-tzap-<version>.tgz
+cd /path/to/your/project && npm install --save-dev /path/to/tzap/dist-npm/tzap/huyz0-tzap-*.tgz
 ```
-
-Once published, `npm install --save-dev tzap` replaces all of that.
 
 Node 22.12 or later. tzap uses the test runner already in your project — Vitest, Jest, node:test
 or Mocha (see [compatibility.md](compatibility.md)) — and resolves it from your project, so it

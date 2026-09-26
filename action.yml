@@ -56,7 +56,7 @@ runs:
         if [ -n "$TZAP_VERSION" ]; then
           case "$TZAP_VERSION" in
             *[/:]*|*.tgz) spec="$TZAP_VERSION" ;;
-            *) spec="tzap@$TZAP_VERSION" ;;
+            *) spec="@huyz0/tzap@$TZAP_VERSION" ;;
           esac
         elif [ -x node_modules/.bin/tzap ]; then
           spec=tzap
