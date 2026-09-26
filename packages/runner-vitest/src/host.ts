@@ -126,6 +126,12 @@ async function init(o: SessionOptions): Promise<void> {
   send({ type: 'ready', runnerVersion: vitestPkg.version });
 }
 
+function sameHits(a: Array<[number, number]>, b: Array<[number, number]>): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i]![0] !== b[i]![0] || a[i]![1] !== b[i]![1]) return false;
+  return true;
+}
+
 function toArray(v: unknown): Array<[number, number]> | undefined {
   return Array.isArray(v) ? (v as Array<[number, number]>) : undefined;
 }
@@ -143,7 +149,10 @@ async function run(req: RunRequest): Promise<RunResult> {
   const files: FileOutcome[] = [];
   if (specs.length > 0) {
     const res = await v.runTestSpecifications(specs);
+    // The result lists every module Vitest has ever run in this instance, not only this run's.
+    const ran = new Set(specs.map((s) => norm(s.moduleId)));
     for (const mod of res.testModules) {
+      if (!ran.has(norm(mod.moduleId))) continue;
       const meta = mod.meta();
       const errs = mod.errors();
       const fo: FileOutcome = { file: mod.moduleId };
@@ -160,8 +169,14 @@ async function run(req: RunRequest): Promise<RunResult> {
           name: t.fullName,
           file: mod.moduleId,
           state,
-          duration: t.diagnostic()?.duration ?? 0,
+          duration: typeof m.tzapDuration === 'number' ? m.tzapDuration : (t.diagnostic()?.duration ?? 0),
         };
+        if (req.mode === 'coverage') {
+          const h1 = toArray(m.tzapHits) ?? [];
+          const h2 = toArray(m.tzapHits2);
+          if (typeof m.tzapRepeatFail === 'string') out.stateSensitive = `fails when repeated: ${m.tzapRepeatFail}`;
+          else if (h2 && !sameHits(h1, h2)) out.stateSensitive = 'takes a different path when repeated';
+        }
         if (state === 'fail') out.message = r.errors?.[0]?.message ?? 'failed';
         const hits = toArray(m.tzapHits);
         if (hits) out.hits = hits;

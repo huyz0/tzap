@@ -35,8 +35,12 @@ export interface RunRequest {
   budgetMs?: number;
 }
 
-/** Outcome letter of a try: Killed, Survived, Timeout (declared hung), or X (skipped: already killed this round). */
-export type TryOutcome = 'K' | 'S' | 'T' | 'X';
+/**
+ * Outcome letter of a try: Killed, Survived, Timeout (declared hung), X (skipped: already killed
+ * this round), or U (unreached: the mutant's code never ran during the try, so whatever the test
+ * did, the mutant did not decide it — state left by an earlier try, a memo, a cache).
+ */
+export type TryOutcome = 'K' | 'S' | 'T' | 'X' | 'U';
 
 export interface TestOutcome {
   id: string;
@@ -52,6 +56,11 @@ export interface TestOutcome {
   hits?: Array<[number, number]>;
   /** `coverage`: loop back-edges taken inside this test. */
   loops?: number;
+  /**
+   * `coverage`: the test ran a second time, warm, and took a different path or failed. Its
+   * verdicts in warm mutant runs could be decided by state rather than by the mutant.
+   */
+  stateSensitive?: string;
   /** `mutate`/`static`: [mutant, outcome, message?] per try, in order. */
   tries?: Array<[number, TryOutcome, string?]>;
 }

@@ -18,6 +18,12 @@ importers:
         specifier: 5.0.2
         version: 5.0.2(@types/node@24.13.6)(vite@8.3.1(@types/node@24.13.6)(yaml@2.9.1))
 
+  fixtures/hazards-vitest:
+    devDependencies:
+      vitest:
+        specifier: 5.0.2
+        version: 5.0.2(@types/node@24.13.6)(vite@8.3.1(@types/node@24.13.6)(yaml@2.9.1))
+
   fixtures/sample-vitest:
     devDependencies:
       vitest:

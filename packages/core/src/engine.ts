@@ -72,11 +72,16 @@ interface TestRecord extends TestInfo {
   hits: Map<number, number>;
   loops: number;
   red?: string;
+  /** Behaves differently when repeated warm: warm tries it decides cannot be trusted. */
+  stateSensitive?: string;
 }
 
 interface Pending {
   d: MutantDescriptor;
+  /** Every covering test, in the order they are tried. */
   tests: string[];
+  /** The covering tests the warm engine may try: those that are not state-sensitive. */
+  warm: string[];
   cursor: number;
   completed: number;
 }
@@ -245,12 +250,17 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
           loops: t.loops ?? 0,
         };
         if (t.state === 'fail') rec.red = t.message ?? 'failed';
+        if (t.stateSensitive) rec.stateSensitive = t.stateSensitive;
         tests.set(key, rec);
       }
     }
     const red = [...tests.values()].filter((t) => t.red !== undefined);
     const green = [...tests.values()].filter((t) => t.red === undefined);
     emit({ type: 'coverage', tests: green.length, red: red.length });
+    const sensitive = green.filter((t) => t.stateSensitive);
+    if (sensitive.length) {
+      emit({ type: 'warning', message: `${sensitive.length} of ${green.length} tests behave differently when repeated; mutants only they cover are decided in isolation (${sensitive.slice(0, 3).map((t) => t.name).join('; ')}${sensitive.length > 3 ? '; ...' : ''})` });
+    }
 
     // Import closures: the cache's key for "nothing this test can reach has changed".
     const graph = new ImportGraph({
@@ -316,7 +326,8 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
           return (a.duration ?? 0) - (b.duration ?? 0) || (a.key < b.key ? -1 : 1);
         })
         .map((t) => t.key);
-      covered.push({ d, tests: ordered, cursor: 0, completed: 0 });
+      const warmTests = ordered.filter((k) => !tests.get(k)!.stateSensitive);
+      covered.push({ d, tests: ordered, warm: warmTests, cursor: 0, completed: 0 });
     }
     const total = placed.length;
     const decidedCount = () => results.size;
@@ -347,7 +358,13 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
     async function warmEngine(): Promise<Array<{ d: MutantDescriptor; tests: string[] }>> {
       const fallback: Array<{ d: MutantDescriptor; tests: string[] }> = [];
       let round = 0;
-      let active = covered.filter((p) => p.cursor < p.tests.length);
+      for (const p of covered) {
+        if (p.warm.length === 0) {
+          fallback.push({ d: p.d, tests: p.tests });
+          results.set(p.d.num, { ...p.d, status: 'Pending' });
+        }
+      }
+      let active = covered.filter((p) => p.cursor < p.warm.length);
       while (active.length > 0) {
         round++;
         // Round 1 tries each mutant against its most likely killer only; later rounds try
@@ -357,9 +374,9 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         let tries = 0;
         let budget = 10_000;
         for (const p of active) {
-          const upto = firstRound ? p.cursor + 1 : p.tests.length;
+          const upto = firstRound ? p.cursor + 1 : p.warm.length;
           for (let i = p.cursor; i < upto; i++) {
-            const t = tests.get(p.tests[i]!)!;
+            const t = tests.get(p.warm[i]!)!;
             let plan = byPkg.get(t.pkg);
             if (!plan) byPkg.set(t.pkg, (plan = new Map()));
             let list = plan.get(t.runnerId);
@@ -396,8 +413,15 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
             // have decided them. It is decided again in isolation.
             fallback.push({ d: p.d, tests: p.tests });
             results.set(p.d.num, { ...p.d, status: 'Pending' });
-          } else if (p.cursor >= p.tests.length) {
-            results.set(p.d.num, { ...p.d, status: 'Survived', coveredBy: p.tests, testsCompleted: p.completed });
+          } else if (p.cursor >= p.warm.length) {
+            if (p.warm.length < p.tests.length) {
+              // Survived every test the warm engine could trust; the state-sensitive ones get
+              // their say in isolation.
+              fallback.push({ d: p.d, tests: p.tests });
+              results.set(p.d.num, { ...p.d, status: 'Pending' });
+            } else {
+              results.set(p.d.num, { ...p.d, status: 'Survived', coveredBy: p.tests, testsCompleted: p.completed });
+            }
           }
         }
         emit({ type: 'round', round, tries, ms: Math.round(performance.now() - started) });
@@ -405,7 +429,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         active = active.filter((p) => !results.has(p.d.num));
       }
       for (const f of fallback) results.delete(f.d.num);
-      if (fallback.length) emit({ type: 'warning', message: `${fallback.length} mutants re-decided in isolation because a control try failed around them` });
+      if (fallback.length) emit({ type: 'warning', message: `${fallback.length} mutants re-decided in isolation: a control try failed around them, or the test never reached them in the warm run` });
       return fallback;
     }
 
@@ -428,7 +452,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
           let o = outcomes.get(m);
           if (!o) outcomes.set(m, (o = { tested: 0 }));
           if (outcome === 'X') continue;
-          if (controlFailed) {
+          if (controlFailed || outcome === 'U') {
             suspect.add(m);
             continue;
           }

@@ -29,6 +29,7 @@ interface Task {
   retry?: number;
   concurrent?: boolean;
   fails?: boolean;
+  promises?: unknown[];
   meta: Record<string, unknown>;
   result?: { state: string; errors?: Array<{ message?: string }>; repeatCount?: number };
 }
@@ -116,6 +117,9 @@ export function setup(vitest: Vitest): void {
   vitest.beforeEach(({ task }) => {
     const tries = plan[task.id];
     if (!tries) return;
+    // Vitest keeps unawaited `expect(...).resolves` promises on the test and awaits them after
+    // every repetition: one that a previous try left hanging would time out every later try.
+    task.promises = undefined;
     const i = task.result?.repeatCount ?? 0;
     const tr = tries[i]!;
     // m === -1 is a control try: the test unmutated, bracketing the mutant tries so the engine
@@ -133,6 +137,7 @@ export function setup(vitest: Vitest): void {
     if (!tries) return;
     const i = task.result?.repeatCount ?? 0;
     const tr = tries[i]!;
+    const reached = rt.n > 0;
     const { hung } = endTry(rt);
     if (payload.mode === 'static') rt.a = payload.staticMutant ?? -1;
     const failed = task.result?.state === 'fail';
@@ -140,6 +145,7 @@ export function setup(vitest: Vitest): void {
     let outcome: TryOutcome;
     if (message === SKIP) outcome = 'X';
     else if (hung) outcome = 'T';
+    else if (payload.mode === 'mutate' && tr.m >= 0 && !reached) outcome = 'U';
     else outcome = failed !== (task.fails === true) ? 'K' : 'S';
     if ((outcome === 'K' || outcome === 'T') && tr.m >= 0) ws.killed.add(tr.m);
     (task.meta.tzap as Array<[number, TryOutcome, string?]>).push(
@@ -152,22 +158,52 @@ export function setup(vitest: Vitest): void {
   });
 }
 
+/**
+ * Coverage runs every test twice in a row. The first run is the coverage; the second shows
+ * whether the test behaves the same once the modules it uses are warm. A test whose second run
+ * takes a different path, or fails, depends on state its first run left behind (a memo, a
+ * counter, a cache), and the warm engine cannot trust mutant tries that such a test decides.
+ */
 function setupCoverage(vitest: Vitest, rt: TzapRuntime): void {
   const outside = new Map<number, number>();
   const collectOutside = () => {
     for (const [site, n] of drainHits(rt)) outside.set(site, (outside.get(site) ?? 0) + n);
   };
-  vitest.beforeAll(() => {
+  // Vitest parses hook sources: the first parameter must be a destructuring pattern.
+  vitest.beforeAll(({}, file) => {
     // Hits so far belong to module evaluation and collection of this file: static.
     collectOutside();
+    walk(file, (t) => {
+      if (t.mode !== 'run' && t.mode !== 'queued') return;
+      t.repeats = 1;
+      t.retry = 0;
+      // Hit counters are global: tests running concurrently would mix their coverage.
+      t.concurrent = false;
+    });
   });
+  let started = 0;
   vitest.beforeEach(() => {
     collectOutside();
     endTry(rt);
+    started = performance.now();
   });
   vitest.afterEach(({ task }) => {
-    task.meta.tzapHits = drainHits(rt);
-    task.meta.tzapLoops = rt.l;
+    const rep = task.result?.repeatCount ?? 0;
+    const hits = drainHits(rt);
+    if (rep === 0) {
+      task.meta.tzapHits = hits;
+      task.meta.tzapLoops = rt.l;
+      task.meta.tzapDuration = performance.now() - started;
+      if (task.result?.state === 'fail') task.meta.tzapRed = true;
+    } else {
+      task.meta.tzapHits2 = hits;
+      if (task.result?.state === 'fail' && task.meta.tzapRed !== true) {
+        // Passed once, failed when repeated: the test is not repeatable. Not a red test.
+        task.meta.tzapRepeatFail = firstMessage(task) ?? 'failed';
+        task.result.state = 'pass';
+        task.result.errors = undefined;
+      }
+    }
     endTry(rt);
   });
   vitest.afterAll(({}, file) => {
