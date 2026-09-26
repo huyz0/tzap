@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.tzap/
+.stryker-tmp/
+reports/
+*.log
