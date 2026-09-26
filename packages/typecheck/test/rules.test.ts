@@ -89,3 +89,27 @@ describe('type-directed rules on typed-vitest', () => {
     expect(naive.filter((m) => !invalid.has(m.num)).map(where)).toEqual(['src/math.ts:38 ArrowFunction']);
   });
 });
+
+describe('type-directed rules on look-alikes', () => {
+  const root = path.join(import.meta.dirname, '../fixtures/lookalikes');
+  const file = 'src/lookalikes.ts';
+
+  it('drop nothing the checker accepts: guards, shadowing, opaque aliases, nested scopes', async () => {
+    const source = readFileSync(path.join(root, file), 'utf8');
+    const all = instrument({ file, source, firstMutant: 0, firstSite: 0 });
+    const placed = all.mutants.filter((m) => m.num >= 0);
+    const checker = createTypeChecker({ root });
+    const invalid = await checker.check(placed, root);
+    await checker.close();
+    // The look-alikes are there: the mutants each case is about compile.
+    for (const [line, mutator] of [[10, 'OptionalChaining'], [16, 'OptionalChaining'], [22, 'BlockStatement'], [25, 'ArrowFunction'], [28, 'ObjectLiteral'], [36, 'BooleanLiteral'], [40, 'ArrowFunction']] as const) {
+      const ms = placed.filter((m) => m.location.start.line === line && m.mutatorName === mutator);
+      expect(ms.length, `${line} ${mutator}`).toBeGreaterThan(0);
+      expect(ms.some((m) => !invalid.has(m.num)), `${line} ${mutator} compiles`).toBe(true);
+    }
+    const filtered = instrument({ file, source, firstMutant: 0, firstSite: 0, filters: typeFilters() });
+    const dropped = filtered.mutants.filter((m) => m.ignoredBy?.startsWith('type:'));
+    const byKey = new Map(placed.map((m) => [m.id, m]));
+    for (const m of dropped) expect(invalid.has(byKey.get(m.id)!.num), `${m.location.start.line} ${m.mutatorName} dropped by ${m.ignoredBy}`).toBe(true);
+  });
+});

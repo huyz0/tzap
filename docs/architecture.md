@@ -122,8 +122,9 @@ result exactly as it would the original.
 
 **Encoding.** A global `__tzap` object from `@tzap/runtime`, with `a` (active mutant number, `-1`
 when none), `c` (a `Uint32Array` of per-site hit counters), a hit guard `m()` on every mutated
-branch and a loop guard. Every mutant at one position shares that position's site. Actual output
-for `while (s < a) { s += b; }` and `return a + b`:
+branch and a loop guard. Every mutant at one position shares that position's site. The output for
+`while (s < a) { s += b; }` and `return a + b` with the EqualityOperator, BlockStatement and
+ArithmeticOperator mutators on (the default set adds more at the same positions):
 
 ```ts
 // expression — nested ternary; each branch carries the ORIGINAL operand text, never a clone

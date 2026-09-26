@@ -5,8 +5,10 @@
  * a dropped mutant is reported `Ignored` with the rule's reason.
  *
  * Every rule was measured for precision against the checker on the tzap sources and the
- * typed-vitest fixture (7.9k mutants). `TYPE_RULES` marks `shipped` only the rules that measured
- * 100% precision; the others are exported for measurement and never enabled by default.
+ * typed-vitest fixture (7.9k mutants); `TYPE_RULES` marks `shipped` only the rules that measured
+ * 100% precision there, and the others are exported for measurement and never enabled by default.
+ * A rule decides only what it can see: an unresolved type, a name bound where it does not look, or
+ * a variable referenced where it could be narrowed leaves the mutant to run.
  *
  * All rules assume `strict` (at least `strictNullChecks`); they must be off for a project that is
  * not strict, which only the caller (who reads the tsconfig) can know.
@@ -102,28 +104,61 @@ const NON_NULLISH_TYPES = new Set([
 ]);
 const KNOWN_NON_NULLISH = new Set(['Array', 'ReadonlyArray', 'Map', 'Set', 'ReadonlyMap', 'ReadonlySet', 'Record', 'Promise', 'RegExp', 'Date', 'Error']);
 
-/** The declaration of `name` visible at the node: a parameter or a variable of an enclosing scope. */
-function declarationOf(name: string, ancestors: readonly Node[]): { type: Node | undefined; optional: boolean; init?: Node } | undefined {
+/** Whether a binding pattern (or a declaration's name) may bind `name`: any identifier in it counts. */
+function binds(pattern: Node | undefined | null, name: string): boolean {
+  if (!pattern) return false;
+  for (const n of walk(pattern)) if (n.type === 'Identifier' && n.name === name) return true;
+  return false;
+}
+
+/** A binding of `name` that `declarationOf` cannot read a type from: its type is unknown. */
+const UNKNOWN_BINDING = { type: undefined, optional: false, unknown: true } as const;
+
+/**
+ * The declaration of `name` visible at the node: a parameter or a variable of an enclosing scope,
+ * with the scope it belongs to. A binding it cannot read (a destructured parameter, a `for...of`
+ * or `catch` binding, a function or class of that name) is reported `unknown`, never skipped:
+ * skipping it would find an outer declaration it shadows.
+ */
+function declarationOf(name: string, ancestors: readonly Node[]): { type: Node | undefined; optional: boolean; init?: Node; unknown?: boolean; scope?: Node } | undefined {
   for (let i = ancestors.length - 1; i >= 0; i--) {
     const a = ancestors[i]!;
     if (FUNCTIONS.has(a.type)) {
+      // A named function expression's own name, inside it.
+      if (a.type === 'FunctionExpression' && nameOf(a.id as Node) === name) return UNKNOWN_BINDING;
       for (let p of a.params as Node[]) {
         if (p.type === 'TSParameterProperty') p = p.parameter as Node;
         const target = p.type === 'AssignmentPattern' ? (p.left as Node) : p;
-        if (nameOf(target) === name) return { type: ann(target), optional: target.optional === true || p.type === 'AssignmentPattern' };
+        if (nameOf(target) === name) return { type: ann(target), optional: target.optional === true || p.type === 'AssignmentPattern', scope: a };
+        if (binds(p, name)) return UNKNOWN_BINDING;
       }
     }
+    if (a.type === 'CatchClause' && binds(a.param as Node, name)) return UNKNOWN_BINDING;
+    if ((a.type === 'ForOfStatement' || a.type === 'ForInStatement' || a.type === 'ForStatement') && binds((a.left ?? a.init) as Node, name)) return UNKNOWN_BINDING;
     if (SCOPES.has(a.type)) {
       for (let s of a.body as Node[]) {
-        if (s.type === 'ExportNamedDeclaration' && s.declaration) s = s.declaration as Node;
+        if ((s.type === 'ExportNamedDeclaration' || s.type === 'ExportDefaultDeclaration') && s.declaration) s = s.declaration as Node;
+        if ((s.type === 'FunctionDeclaration' || s.type === 'ClassDeclaration') && nameOf(s.id as Node) === name) return UNKNOWN_BINDING;
         if (s.type !== 'VariableDeclaration') continue;
         for (const d of s.declarations as Node[]) {
-          if (nameOf(d.id as Node) === name) return { type: ann(d.id as Node), optional: false, init: (d.init as Node) ?? undefined };
+          if (nameOf(d.id as Node) === name) return { type: ann(d.id as Node), optional: false, init: (d.init as Node) ?? undefined, scope: a };
+          if (binds(d.id as Node, name)) return UNKNOWN_BINDING;
         }
       }
     }
   }
   return undefined;
+}
+
+/**
+ * Whether `name` is referenced in its scope anywhere but its declaration and the one use: any
+ * other reference could narrow it (a guard, an assignment, an assertion call), which this rule
+ * cannot follow.
+ */
+function referencedElsewhere(name: string, scope: Node): boolean {
+  let n = 0;
+  for (const x of walk(scope)) if (x.type === 'Identifier' && x.name === name && ++n > 2) return true;
+  return false;
 }
 
 /** Members named `prop` declared in same-file interfaces and object type literals. */
@@ -183,9 +218,9 @@ export const returningBodyRule: MutantFilter = ({ mutatorName, node, ancestors }
   if (!t) return undefined;
   if (t.type === 'TSTypePredicate') return t.asserts ? undefined : 'type-invalid: a type predicate must return a value';
   if (t.type === 'TSNeverKeyword') return 'type-invalid: a function returning never cannot end';
-  const program = programOf(ancestors);
-  const ms = members(t, program);
-  if (ms.length === 0 || ms.some((m) => NULLISH.has(m.type) || LOOSE.has(m.type) || m.type === 'TSNeverKeyword')) return undefined;
+  // Only a type that visibly needs a value: an alias it cannot see into (imported, or generic like
+  // `MaybePromise<void>`) may admit `void`.
+  if (!visiblyNonNullable(t, programOf(ancestors))) return undefined;
   return 'type-invalid: the declared return type needs a value';
 };
 
@@ -208,11 +243,12 @@ export const requiredPropertiesRule: MutantFilter = ({ mutatorName, node, ancest
   return hasRequiredProperty(t, programOf(ancestors)) ? 'type-invalid: the declared type has required properties' : undefined;
 };
 
-/** Visits every node under `root` (no parent tracking). */
-function* walk(root: Node): Generator<Node> {
+/** Visits every node under `root` (no parent tracking), not entering the nodes `skip` names. */
+function* walk(root: Node, skip?: (n: Node) => boolean): Generator<Node> {
   const stack = [root];
   while (stack.length > 0) {
     const n = stack.pop()!;
+    if (skip?.(n)) continue;
     yield n;
     for (const k of Object.keys(n)) {
       if (k === 'parent') continue;
@@ -222,6 +258,19 @@ function* walk(root: Node): Generator<Node> {
       } else if (v && typeof v === 'object' && typeof (v as Node).type === 'string') stack.push(v as Node);
     }
   }
+}
+
+/** Whether a function or block binds `name` itself, so that inside it the name is another variable. */
+function shadows(n: Node, name: string): boolean {
+  if (FUNCTIONS.has(n.type)) return (n.params as Node[]).some((p) => binds(p, name));
+  if (n.type === 'CatchClause') return binds(n.param as Node, name);
+  if (n.type === 'ForOfStatement' || n.type === 'ForInStatement' || n.type === 'ForStatement') return binds((n.left ?? n.init) as Node, name);
+  if (!SCOPES.has(n.type)) return false;
+  return (n.body as Node[]).some((s) => {
+    const d = (s.type === 'ExportNamedDeclaration' && s.declaration ? s.declaration : s) as Node;
+    if (d.type === 'VariableDeclaration') return (d.declarations as Node[]).some((x) => binds(x.id as Node, name));
+    return (d.type === 'FunctionDeclaration' || d.type === 'ClassDeclaration') && nameOf(d.id as Node) === name;
+  });
 }
 
 const OBJECT_PROTOTYPE = new Set(['constructor', 'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable', 'toLocaleString', 'toString', 'valueOf']);
@@ -239,7 +288,7 @@ export const usedKeysRule: MutantFilter = ({ mutatorName, node, ancestors }) => 
   );
   const scope = [...ancestors].reverse().find((a) => SCOPES.has(a.type));
   if (!scope) return undefined;
-  for (const n of walk(scope)) {
+  for (const n of walk(scope, (x) => x !== scope && shadows(x, name))) {
     if (n.type !== 'MemberExpression' || n.computed || nameOf(n.object as Node) !== name) continue;
     const prop = nameOf(n.property as Node);
     if (prop && keys.has(prop) && !OBJECT_PROTOTYPE.has(prop)) return 'type-invalid: a key of the literal is read later';
@@ -261,8 +310,7 @@ export const typedArrowRule: MutantFilter = ({ mutatorName, node, ancestors }) =
   if (!t || t.type !== 'TSFunctionType' || node.async === true) return undefined;
   const r = ann(t.returnType as Node);
   if (!r) return undefined;
-  const ms = members(r, programOf(ancestors));
-  return ms.length > 0 && ms.every((m) => !NULLISH.has(m.type) && !LOOSE.has(m.type)) ? 'type-invalid: the declared function type returns a value' : undefined;
+  return visiblyNonNullable(r, programOf(ancestors)) ? 'type-invalid: the declared function type returns a value' : undefined;
 };
 
 /**
@@ -290,7 +338,8 @@ function visiblyNullish(e: Node, ancestors: readonly Node[]): boolean {
   }
   if (e.type === 'Identifier') {
     const d = declarationOf(e.name as string, ancestors);
-    return !!d && (d.optional || nullable(d.type, program));
+    if (!d || d.unknown || !d.scope || referencedElsewhere(e.name as string, d.scope)) return false;
+    return d.optional || nullable(d.type, program);
   }
   if (e.type === 'MemberExpression' && !e.computed) {
     const prop = nameOf(e.property as Node);

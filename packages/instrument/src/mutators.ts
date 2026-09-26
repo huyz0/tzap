@@ -1,6 +1,6 @@
 import * as weaponRegex from 'weapon-regex';
 import { type Node, isIdentifier, isNode, isStringLiteral, isTemplateLiteral } from './ast.js';
-import { findToken } from './text.js';
+import { findToken, skipTrivia } from './text.js';
 
 /**
  * How a mutant is compiled into the schemata.
@@ -19,6 +19,8 @@ export interface Proposal {
   /** Text of the mutated node, reported as the mutant's replacement. */
   replacement: string;
   placement: Placement;
+  /** The text that runs, where it differs from the reported replacement: see MutantDescriptor.runs. */
+  runs?: string;
 }
 
 export interface MutatorContext {
@@ -40,6 +42,17 @@ export interface Mutator {
 
 const text = (ctx: MutatorContext, n: Node) => ctx.source.slice(n.start, n.end);
 const expr = (replacement: string): Proposal => ({ replacement, placement: 'expression' });
+
+/**
+ * `!x` or `~x` without its operator. Reported as the operand, as StrykerJS does; what runs keeps
+ * the parentheses the operand had, which the parser does not count as part of it:
+ * `!(a ?? b) && c` runs `(a ?? b) && c`, and `f(!(a, b))` runs `f((a, b))`.
+ */
+function operandOnly(node: Node, ctx: MutatorContext): Proposal {
+  const operand = text(ctx, node.argument as Node);
+  const runs = ctx.source.slice(node.start + 1, node.end).trim();
+  return runs === operand ? expr(operand) : { ...expr(operand), runs };
+}
 
 /** Replaces the operator token that lies between two operands. */
 function swapOperator(ctx: MutatorContext, node: Node, left: Node, right: Node, op: string, next: string): string | undefined {
@@ -188,9 +201,7 @@ export const booleanLiteral: Mutator = {
     if (node.type === 'Literal' && typeof node.value === 'boolean') {
       return [expr(node.value ? 'false' : 'true')];
     }
-    if (node.type === 'UnaryExpression' && node.operator === '!' && node.prefix !== false) {
-      return [expr(text(ctx, node.argument as Node))];
-    }
+    if (node.type === 'UnaryExpression' && node.operator === '!' && node.prefix !== false) return [operandOnly(node, ctx)];
     return [];
   },
 };
@@ -319,13 +330,12 @@ export const logicalOperator: Mutator = {
       n.type === 'LogicalExpression' &&
       (n === left ? n.start === node.start : n.end === node.end) &&
       (next === '&&' ? n.operator === '||' || n.operator === '??' : n.operator === '??');
-    const bare = regroups;
-    if (bare(left) || bare(right)) {
+    if (regroups(left) || regroups(right)) {
       // The swapped operator has the same length as the original, so offsets into `r` are
       // offsets into the source; splice by them, keeping any parenthesis that closes the node.
       const o = (x: number) => x - node.start;
-      const l = bare(left) ? `(${ctx.source.slice(left.start, left.end)})` : ctx.source.slice(left.start, left.end);
-      const rt = bare(right) ? `(${ctx.source.slice(right.start, right.end)})` : ctx.source.slice(right.start, right.end);
+      const l = regroups(left) ? `(${ctx.source.slice(left.start, left.end)})` : ctx.source.slice(left.start, left.end);
+      const rt = regroups(right) ? `(${ctx.source.slice(right.start, right.end)})` : ctx.source.slice(right.start, right.end);
       return [expr(r.slice(0, o(left.start)) + l + r.slice(o(left.end), o(right.start)) + rt + r.slice(o(right.end)))];
     }
     return [expr(r)];
@@ -373,9 +383,18 @@ export const methodExpression: Mutator = {
     const next = METHODS.get(name);
     if (next === undefined) return [];
     const prop = callee.property as Node;
-    // The object as written, parentheses included: `(a + b).trim()` becomes `(a + b)`, not `a + b`
-    // (the AST drops the parentheses), which would change the meaning where it is spliced.
-    if (next === null) return [expr(ctx.source.slice(node.start, prop.start).replace(/\s*\??\.\s*$/, ''))];
+    const object = callee.object as Node;
+    if (next === null) {
+      // `super` alone is not an expression.
+      if (object.type === 'Super') return [];
+      // The object as written, parentheses included: `(a + b).trim()` becomes `(a + b)`, not
+      // `a + b` (the AST drops the parentheses), which would change the meaning where it is
+      // spliced. It ends at its last closing parenthesis, before any comment ahead of the dot:
+      // `a // note\n  .trim()` becomes `a`, not a line comment that swallows what follows.
+      let end = object.end;
+      for (let i = skipTrivia(ctx.source, end); ctx.source[i] === ')'; i = skipTrivia(ctx.source, end)) end = i + 1;
+      return [expr(ctx.source.slice(node.start, end))];
+    }
     return [expr(ctx.source.slice(node.start, prop.start) + next + ctx.source.slice(prop.end, node.end))];
   },
 };
@@ -449,6 +468,14 @@ export const regex: Mutator = {
 
 // --- StringLiteral ------------------------------------------------------------------------
 
+/** The expression is the specifier of a dynamic `import()` or a `require()`. */
+function isModuleSpecifier(ctx: MutatorContext): boolean {
+  const p = ctx.parent;
+  if (!p) return false;
+  if (p.type === 'ImportExpression') return true;
+  return p.type === 'CallExpression' && (isIdentifier(p.callee, 'require') || (isNode(p.callee) && p.callee.type === 'Import'));
+}
+
 function isValidStringParent(node: Node, ctx: MutatorContext): boolean {
   const p = ctx.parent;
   if (!p) return true;
@@ -459,6 +486,8 @@ function isValidStringParent(node: Node, ctx: MutatorContext): boolean {
     case 'ExportDefaultDeclaration':
     case 'ImportExpression':
     case 'ImportAttribute':
+    case 'ImportSpecifier':
+    case 'ExportSpecifier':
     case 'TSExternalModuleReference':
     case 'JSXAttribute':
     case 'ExpressionStatement':
@@ -483,6 +512,8 @@ export const stringLiteral: Mutator = {
   name: 'StringLiteral',
   mutate(node, ctx) {
     if (node.type === 'TemplateLiteral') {
+      // A module specifier, `import(`./x/${n}.js`)`, is not mutated, as a string one is not.
+      if (isModuleSpecifier(ctx)) return [];
       const quasis = node.quasis as Array<Node & { value: { raw: string } }>;
       const empty = quasis.length === 1 && quasis[0]!.value.raw.length === 0;
       return [expr(empty ? '`Stryker was here!`' : '``')];
@@ -512,13 +543,12 @@ export const unaryOperator: Mutator = {
   name: 'UnaryOperator',
   mutate(node, ctx) {
     if (node.type !== 'UnaryExpression' || node.prefix === false) return [];
-    const arg = node.argument as Node;
     switch (node.operator) {
       case '+':
       case '-':
         return [expr(flipSign(node.operator === '+' ? '-' : '+', node, ctx))];
       case '~':
-        return [expr(text(ctx, arg))];
+        return [operandOnly(node, ctx)];
       default:
         return [];
     }

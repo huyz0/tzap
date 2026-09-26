@@ -104,6 +104,11 @@ describe('BooleanLiteral', () => {
 });
 
 describe('StringLiteral', () => {
+  it('leaves module specifiers alone: string names in import and export lists, template specifiers of import() and require()', () => {
+    const src = "const x = 1;\nexport { x as 'a-b' };\nconst n = 2;\nimport(`./m/${n}.js`);\nrequire(`./r/${n}`);\nf(`kept ${n}`);";
+    expect(inventory(src, ['StringLiteral'])).toEqual(['StringLiteral 6:3 `kept ${n}` -> ``']);
+  });
+
   it('empties strings and fills empty ones, but not keys, imports, directives or require', () => {
     const src = [
       "'use strict';",
@@ -204,6 +209,10 @@ describe('CallExpression', () => {
 });
 
 describe('MethodExpression', () => {
+  it('keeps a comment before the dot out of the object it leaves, and never leaves a bare super', () => {
+    expect(inventory('a = s // note\n  .trim();\nclass A extends B { m() { return super.trim(); } }', ['MethodExpression'])).toEqual(['MethodExpression 1:5 s // note\n  .trim() -> s']);
+  });
+
   it('removes and swaps the listed methods', () => {
     expect(inventory('a = s.trim(); b = s.toLowerCase(); c = xs.filter(f); d = Math.min(1, 2);', ['MethodExpression'])).toEqual([
       'MethodExpression 1:5 s.trim() -> s',

@@ -20,6 +20,9 @@ export type MutantFilter = (candidate: {
   source: string;
 }) => string | undefined;
 
+/** Class members whose computed key is never mutated. */
+const CLASS_MEMBERS = new Set(['MethodDefinition', 'PropertyDefinition', 'AccessorProperty', 'TSAbstractMethodDefinition', 'TSAbstractPropertyDefinition', 'TSAbstractAccessorProperty']);
+
 export interface InstrumentInput {
   /** Path relative to the model root, forward slashes. Also used to pick the dialect. */
   file: string;
@@ -59,6 +62,14 @@ interface Candidate {
   node: Node;
   replacement: string;
   placement: Placement;
+  /** What runs, where it differs from `replacement`. */
+  runs?: string;
+  /**
+   * Outside the changed lines of a diff run. Still proposed, filtered and counted, so that every
+   * decision that depends on its neighbours (a scope filter, a reduction, an id's ordinal) comes
+   * out as in a full run; then dropped.
+   */
+  outside?: boolean;
   scope: string;
   ignoredBy?: string;
   statusReason?: string;
@@ -273,7 +284,7 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
           i--;
         }
         c.target = cur;
-        c.targetText = source.slice(cur.start, node.start) + c.replacement + source.slice(node.end, cur.end);
+        c.targetText = source.slice(cur.start, node.start) + (c.runs ?? c.replacement) + source.slice(node.end, cur.end);
         // An expression at the very start of an expression statement: a leading `(` would
         // otherwise be parsed as a call on the previous line when that line has no semicolon.
         for (let j = i; j >= 0; j--) {
@@ -291,6 +302,9 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
   const visit = (node: Node) => {
     if (isSkipped(node)) return;
     const parent = ancestors[ancestors.length - 1];
+    // A class member's computed key runs once, as the class is defined, and has no expression of
+    // its own a mutant could be switched in around: it is never mutated.
+    if (parent && CLASS_MEMBERS.has(parent.type) && parent.computed === true && parent.key === node) return;
     if (LOOP_TYPES.has(node.type)) loops.push(node);
 
     const name = scopeName(node, parent, anonymousCounters[anonymousCounters.length - 1]!);
@@ -303,12 +317,12 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
 
     // Candidates from here to `ownEnd` are this node's own; from here to the end, its subtree's.
     const start = candidates.length;
-    if (overlaps(node)) {
+    {
       const ctx = { source, parent, ancestors };
       for (const m of mutators) {
         for (const p of m.mutate(node, ctx)) {
-          if (!inScope(node, p.placement)) continue;
-          const c: Candidate = { mutatorName: m.name, node, replacement: p.replacement, placement: p.placement, scope };
+          const c: Candidate = { mutatorName: m.name, node, replacement: p.replacement, placement: p.placement, scope, ...(p.runs !== undefined ? { runs: p.runs } : {}) };
+          if (!inScope(node, p.placement)) c.outside = true;
           const line = lines.line(node.start);
           const reason = directives.ignoreReason(node.start, line, m.name);
           if (reason !== undefined) {
@@ -356,7 +370,7 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
   if (input.reduce?.equivalence) reduceEquivalent(live0, source, file);
   if (input.reduce?.onePerLine) reduceOnePerLine(live0.filter((c) => c.ignoredBy === undefined), lines);
   for (const c of candidates) {
-    if (!c.removed && c.ignoredBy === undefined) place(c, c.ancestors!);
+    if (!c.removed && c.ignoredBy === undefined && !c.outside) place(c, c.ancestors!);
     c.ancestors = undefined;
   }
 
@@ -371,6 +385,7 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
     const key = [file, c.scope, c.mutatorName, original, c.replacement].join('\0');
     const ordinal = ordinals.get(key) ?? 0;
     ordinals.set(key, ordinal + 1);
+    if (c.outside) continue;
     const d: MutantDescriptor = {
       id: hash([file, c.scope, c.mutatorName, original, c.replacement, String(ordinal)]),
       num: c.ignoredBy ? -1 : nextMutant++,
@@ -383,8 +398,13 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
       site: -1,
     };
     // An arrow function's body is replaced, not the arrow: `async (x) => undefined` runs where the
-    // report (as StrykerJS names it) says `() => undefined`.
-    if (c.placement === 'arrow-body') d.runs = source.slice(c.node.start, (c.node.body as Node).start) + 'undefined';
+    // report (as StrykerJS names it) says `() => undefined`. Parentheses around the body stay,
+    // and the parser does not count them as the body's: `(x) => ({ x })` runs `(x) => (undefined)`.
+    if (c.runs !== undefined) d.runs = c.runs;
+    if (c.placement === 'arrow-body') {
+      const body = c.node.body as Node;
+      d.runs = source.slice(c.node.start, body.start) + 'undefined' + source.slice(body.end, c.node.end);
+    }
     if (c.ignoredBy) {
       d.ignoredBy = c.ignoredBy;
       d.description = c.statusReason ?? d.description;
@@ -393,139 +413,20 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
     byCandidate.set(c, d);
   }
 
-  const placed = live.filter((c) => !c.ignoredBy);
+  const placed = live.filter((c) => !c.ignoredBy && !c.outside);
   // Nothing to switch on: loops alone are not worth instrumenting a file for.
   if (placed.length === 0) {
     return { code: undefined, map: undefined, mutants: descriptors, nextMutant, nextSite, errors };
   }
 
-  // Emission, as a function: run once, and again without any mutant that broke the output.
+  // Emission: once, and again without any mutant that broke the output.
   const siteStart = nextSite;
-  const render = (placed: Candidate[]) => {
-  nextSite = siteStart;
-  // Group by placement target.
-  interface Group {
-    kind: Placement;
-    target: Node;
-    entries: Array<{ num: number; text: string }>;
-    site: number;
-    voidPrefix: boolean;
-  }
-  const groups = new Map<string, Group>();
-  for (const c of placed) {
-    const target = c.target!;
-    const kind: Placement = c.placement === 'arrow-body' ? 'expression' : c.placement;
-    const key = `${kind}:${target.start}:${target.end}`;
-    let g = groups.get(key);
-    if (!g) {
-      g = { kind, target, entries: [], site: -1, voidPrefix: false };
-      groups.set(key, g);
-    }
-    g.voidPrefix ||= c.voidPrefix === true;
-    g.entries.push({ num: byCandidate.get(c)!.num, text: c.targetText ?? c.replacement });
-  }
-  for (const g of groups.values()) g.site = nextSite++;
-  for (const c of placed) {
-    const target = c.target!;
-    const kind: Placement = c.placement === 'arrow-body' ? 'expression' : c.placement;
-    byCandidate.get(c)!.site = groups.get(`${kind}:${target.start}:${target.end}`)!.site;
-  }
-
-  const R = RUNTIME_GLOBAL;
-  const s = new MagicString(original);
-  type Edit = { start: number; end: number; order: number; apply: () => void };
-  const edits: Edit[] = [];
-  let order = 0;
-
-  for (const g of groups.values()) {
-    const t = g.target;
-    const hit = `${R}.c[${g.site}]++`;
-    const active = (num: number) => `${R}.a===${num}`;
-    switch (g.kind) {
-      case 'expression': {
-        const pre =
-          (g.voidPrefix ? 'void ' : '') +
-          '(' +
-          g.entries.map((e) => `${active(e.num)}?(${R}.m(),${e.text}):`).join('') +
-          `(${hit},`;
-        edits.push({ start: t.start, end: t.end, order: order++, apply: () => { s.prependRight(t.start, pre); s.appendLeft(t.end, '))'); } });
-        break;
-      }
-      case 'block': {
-        const [e] = g.entries;
-        const body = t.body as Node[];
-        const directivesEnd = body.filter((x) => x.type === 'ExpressionStatement' && typeof x.directive === 'string').reduce((acc, x) => Math.max(acc, x.end), t.start + 1);
-        const pre = `if(${active(e!.num)}){${R}.m();}else{${hit};`;
-        edits.push({ start: t.start, end: t.end, order: order++, apply: () => { s.prependRight(directivesEnd, pre); s.appendLeft(t.end - 1, '}'); } });
-        break;
-      }
-      case 'statement': {
-        const [e] = g.entries;
-        const pre = `if(${active(e!.num)}){${R}.m();}else{${hit};`;
-        edits.push({ start: t.start, end: t.end, order: order++, apply: () => { s.prependRight(t.start, pre); s.appendLeft(t.end, '}'); } });
-        break;
-      }
-      case 'switch-case': {
-        const [e] = g.entries;
-        const cons = t.consequent as Node[];
-        const first = cons[0]!;
-        const last = cons[cons.length - 1]!;
-        const pre = `if(${active(e!.num)}){${R}.m();}else{${hit};`;
-        edits.push({ start: t.start, end: t.end, order: order++, apply: () => { s.prependRight(first.start, pre); s.appendLeft(last.end, '}'); } });
-        break;
-      }
-      case 'for-test': {
-        const [e] = g.entries;
-        const at = forTestOffset(source, t);
-        const expression = `(${active(e!.num)}?(${R}.m(),false):(${hit},true))`;
-        edits.push({ start: t.start, end: t.end, order: order++, apply: () => { s.appendLeft(at, expression); } });
-        break;
-      }
-      default:
-        break;
-    }
-  }
-
-  const guard = `if(++${R}.l>${R}.L)${R}.x();`;
-  for (const loop of loops) {
-    const body = loop.body as Node;
-    edits.push({
-      start: loop.start,
-      end: loop.end,
-      order: order++,
-      apply: () => {
-        if (body.type === 'BlockStatement') s.prependRight(body.start + 1, guard);
-        else {
-          s.prependRight(body.start, `{${guard}`);
-          s.appendLeft(body.end, '}');
-        }
-      },
-    });
-  }
-
-  // Inner edits first: magic-string puts a later prependRight to the left of an earlier one at
-  // the same offset, and a later appendLeft to the right, so outer constructs wrap inner ones.
-  edits.sort((a, b) => a.end - a.start - (b.end - b.start) || a.order - b.order);
-  for (const e of edits) e.apply();
-
-  const maxSite = nextSite - 1;
-  const program = parsed.program!;
-  const statements = program.body as Node[];
-  const lastDirective = statements.filter((x) => x.type === 'ExpressionStatement' && typeof x.directive === 'string').pop();
-  const firstStatement = statements.find((x) => !(x.type === 'ExpressionStatement' && typeof x.directive === 'string'));
-  const headerAt = lastDirective ? lastDirective.end : firstStatement ? firstStatement.start : source.length;
-  const header = runtimeHeader(maxSite);
-  if (sfc) {
-    // Every block: Vue's <script setup> body ends up inside setup(), a plain <script> at module
-    // level, and each must see the runtime. `var` may be declared twice.
-    for (const at of sfc.blockStarts) s.prependRight(at, `${header}\n`);
-  } else {
-    s.prependRight(headerAt, lastDirective ? `\n${header}\n` : `${header}\n`);
-  }
-
-  const code = s.toString();
-  const map = s.generateMap({ hires: 'boundary', source: file, includeContent: true });
-  return { code, map };
+  const emitInput: EmitInput = { file, original, source, program: parsed.program!, sfc, loops, firstSite: siteStart, numOf: (c) => byCandidate.get(c)!.num };
+  const render = (cs: readonly Candidate[]) => {
+    const r = emit(cs, emitInput);
+    for (const [c, site] of r.sites) byCandidate.get(c)!.site = site;
+    nextSite = r.nextSite;
+    return r;
   };
 
   // Safety net: the output must parse. A mutant whose text cannot sit where it is placed would
@@ -552,6 +453,153 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
     }
   }
   return { code: out.code, map: out.map, mutants: descriptors, nextMutant, nextSite, errors };
+}
+
+/** What `emit` needs besides the mutants: the file, its parse, and where site numbers start. */
+interface EmitInput {
+  file: string;
+  /** The file as given (an SFC whole). */
+  original: string;
+  /** The text parsed: the file, or an SFC's scripts with the rest blanked. */
+  source: string;
+  program: Node;
+  sfc: SfcScripts | undefined;
+  loops: readonly Node[];
+  firstSite: number;
+  numOf: (c: Candidate) => number;
+}
+
+/**
+ * The instrumented file with `placed` compiled in: one site per placement target, each mutant
+ * switched in on its number, a guard on every loop, and the runtime header. Returns the site each
+ * mutant got and the next free site number.
+ */
+function emit(placed: readonly Candidate[], e: EmitInput): { code: string; map: ReturnType<MagicString['generateMap']>; sites: Map<Candidate, number>; nextSite: number } {
+  let nextSite = e.firstSite;
+  const sites = new Map<Candidate, number>();
+  // Group by placement target.
+  interface Group {
+    kind: Placement;
+    target: Node;
+    entries: Array<{ num: number; text: string }>;
+    site: number;
+    voidPrefix: boolean;
+  }
+  const groups = new Map<string, Group>();
+  for (const c of placed) {
+    const target = c.target!;
+    const kind: Placement = c.placement === 'arrow-body' ? 'expression' : c.placement;
+    const key = `${kind}:${target.start}:${target.end}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = { kind, target, entries: [], site: -1, voidPrefix: false };
+      groups.set(key, g);
+    }
+    g.voidPrefix ||= c.voidPrefix === true;
+    g.entries.push({ num: e.numOf(c), text: c.targetText ?? c.runs ?? c.replacement });
+  }
+  for (const g of groups.values()) g.site = nextSite++;
+  for (const c of placed) {
+    const target = c.target!;
+    const kind: Placement = c.placement === 'arrow-body' ? 'expression' : c.placement;
+    sites.set(c, groups.get(`${kind}:${target.start}:${target.end}`)!.site);
+  }
+
+  const R = RUNTIME_GLOBAL;
+  const s = new MagicString(e.original);
+  type Edit = { start: number; end: number; order: number; apply: () => void };
+  const edits: Edit[] = [];
+  let order = 0;
+
+  for (const g of groups.values()) {
+    const t = g.target;
+    const hit = `${R}.c[${g.site}]++`;
+    const active = (num: number) => `${R}.a===${num}`;
+    switch (g.kind) {
+      case 'expression': {
+        const pre =
+          (g.voidPrefix ? 'void ' : '') +
+          '(' +
+          g.entries.map((x) => `${active(x.num)}?(${R}.m(),${x.text}):`).join('') +
+          `(${hit},`;
+        edits.push({ start: t.start, end: t.end, order: order++, apply: () => { s.prependRight(t.start, pre); s.appendLeft(t.end, '))'); } });
+        break;
+      }
+      case 'block': {
+        const [entry] = g.entries;
+        const body = t.body as Node[];
+        const directivesEnd = body.filter((x) => x.type === 'ExpressionStatement' && typeof x.directive === 'string').reduce((acc, x) => Math.max(acc, x.end), t.start + 1);
+        const pre = `if(${active(entry!.num)}){${R}.m();}else{${hit};`;
+        edits.push({ start: t.start, end: t.end, order: order++, apply: () => { s.prependRight(directivesEnd, pre); s.appendLeft(t.end - 1, '}'); } });
+        break;
+      }
+      case 'statement': {
+        const [entry] = g.entries;
+        const pre = `if(${active(entry!.num)}){${R}.m();}else{${hit};`;
+        edits.push({ start: t.start, end: t.end, order: order++, apply: () => { s.prependRight(t.start, pre); s.appendLeft(t.end, '}'); } });
+        break;
+      }
+      case 'switch-case': {
+        const [entry] = g.entries;
+        const cons = t.consequent as Node[];
+        const first = cons[0]!;
+        const last = cons[cons.length - 1]!;
+        const pre = `if(${active(entry!.num)}){${R}.m();}else{${hit};`;
+        edits.push({ start: t.start, end: t.end, order: order++, apply: () => { s.prependRight(first.start, pre); s.appendLeft(last.end, '}'); } });
+        break;
+      }
+      case 'for-test': {
+        const [entry] = g.entries;
+        const at = forTestOffset(e.source, t);
+        const expression = `(${active(entry!.num)}?(${R}.m(),false):(${hit},true))`;
+        edits.push({ start: t.start, end: t.end, order: order++, apply: () => { s.appendLeft(at, expression); } });
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  const guard = `if(++${R}.l>${R}.L)${R}.x();`;
+  for (const loop of e.loops) {
+    const body = loop.body as Node;
+    edits.push({
+      start: loop.start,
+      end: loop.end,
+      order: order++,
+      apply: () => {
+        if (body.type === 'BlockStatement') s.prependRight(body.start + 1, guard);
+        else {
+          s.prependRight(body.start, `{${guard}`);
+          s.appendLeft(body.end, '}');
+        }
+      },
+    });
+  }
+
+  // Inner edits first: magic-string puts a later prependRight to the left of an earlier one at
+  // the same offset, and a later appendLeft to the right, so outer constructs wrap inner ones.
+  edits.sort((a, b) => a.end - a.start - (b.end - b.start) || a.order - b.order);
+  for (const edit of edits) edit.apply();
+
+  const maxSite = nextSite - 1;
+  const program = e.program;
+  const statements = program.body as Node[];
+  const lastDirective = statements.filter((x) => x.type === 'ExpressionStatement' && typeof x.directive === 'string').pop();
+  const firstStatement = statements.find((x) => !(x.type === 'ExpressionStatement' && typeof x.directive === 'string'));
+  const headerAt = lastDirective ? lastDirective.end : firstStatement ? firstStatement.start : e.source.length;
+  const header = runtimeHeader(maxSite);
+  if (e.sfc) {
+    // Every block: Vue's <script setup> body ends up inside setup(), a plain <script> at module
+    // level, and each must see the runtime. `var` may be declared twice.
+    for (const at of e.sfc.blockStarts) s.prependRight(at, `${header}\n`);
+  } else {
+    s.prependRight(headerAt, lastDirective ? `\n${header}\n` : `${header}\n`);
+  }
+
+  const code = s.toString();
+  const map = s.generateMap({ hires: 'boundary', source: e.file, includeContent: true });
+  return { code, map, sites, nextSite };
 }
 
 /** Mutators in the order one-per-line prefers them: those that most often reveal a missing assertion first. */
@@ -604,7 +652,7 @@ function applied(source: string, c: Candidate): string {
     const cons = c.node.consequent as Node[];
     return source.slice(0, cons[0]!.start) + source.slice(cons[cons.length - 1]!.end);
   }
-  return source.slice(0, c.node.start) + c.replacement + source.slice(c.node.end);
+  return source.slice(0, c.node.start) + (c.runs ?? c.replacement) + source.slice(c.node.end);
 }
 
 function reduceEquivalent(live: Candidate[], source: string, file: string): void {
