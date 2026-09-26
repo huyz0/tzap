@@ -1,0 +1,61 @@
+name: tzap mutation testing
+description: Mutation-test the lines a pull request changes, and annotate the survivors on the diff.
+branding:
+  icon: check-circle
+  color: green
+
+inputs:
+  base:
+    description: The ref to diff against. Default the pull request's base branch.
+    required: false
+    default: ''
+  threshold:
+    description: Fail when the mutation score of the changed lines is below this percentage.
+    required: false
+    default: ''
+  working-directory:
+    description: The package or workspace root to run in.
+    required: false
+    default: '.'
+  version:
+    description: The tzap version to run; default the one in the project's devDependencies, else latest.
+    required: false
+    default: ''
+  args:
+    description: Extra arguments for `tzap run`.
+    required: false
+    default: ''
+
+outputs:
+  score:
+    description: The mutation score of the changed lines.
+    value: ${{ steps.tzap.outputs.score }}
+
+runs:
+  using: composite
+  steps:
+    - id: tzap
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        TZAP_BASE: ${{ inputs.base || format('origin/{0}', github.base_ref) }}
+        TZAP_THRESHOLD: ${{ inputs.threshold }}
+        TZAP_VERSION: ${{ inputs.version }}
+        TZAP_ARGS: ${{ inputs.args }}
+      run: |
+        set -o pipefail
+        if ! git rev-parse --verify --quiet "$TZAP_BASE^{commit}" > /dev/null; then
+          echo "::error::$TZAP_BASE is not in this clone. Check out with fetch-depth: 0."
+          exit 2
+        fi
+        spec=tzap
+        if [ -n "$TZAP_VERSION" ]; then spec="tzap@$TZAP_VERSION"; fi
+        threshold=()
+        if [ -n "$TZAP_THRESHOLD" ]; then threshold=(--threshold "$TZAP_THRESHOLD"); fi
+        code=0
+        npx --yes "$spec" run --from "$TZAP_BASE" --to HEAD -r github,markdown,json -o reports/tzap "${threshold[@]}" $TZAP_ARGS || code=$?
+        if [ -f reports/tzap/tzap.md ]; then cat reports/tzap/tzap.md >> "$GITHUB_STEP_SUMMARY"; fi
+        if [ -f reports/tzap/tzap.json ]; then
+          node -e "const r=require('./reports/tzap/tzap.json'); console.log('score=' + (r.score?.mutationScore ?? ''))" >> "$GITHUB_OUTPUT"
+        fi
+        exit $code
