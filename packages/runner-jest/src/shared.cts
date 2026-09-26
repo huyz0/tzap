@@ -15,8 +15,6 @@ export interface RunState {
   staticLimit?: number;
   /** The project's Jest major version: 29 or 30. */
   jestMajor: number;
-  /** Mutants killed so far in this run, across test files: their later tries are skipped. */
-  killed: Set<number>;
   /** Directory test ids are relative to (the project's rootDir). */
   rootDir: string;
   tests: TestOutcome[];

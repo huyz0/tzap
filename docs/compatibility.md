@@ -23,6 +23,17 @@ untested; a result from it should be checked against `--engine reference` before
 | Bun, Deno | — | not supported; see [spikes/C-bun-deno.md](spikes/C-bun-deno.md) |
 | Karma, Jasmine | — | not supported (Karma is deprecated; Angular 21 moved to Vitest) |
 
+Where the runners differ, tzap follows each runner's own command line:
+
+- **An error thrown outside the test that caused it** (a timer, an unawaited promise): Mocha and
+  Jest fail whichever test is running, as `mocha` and `jest` do; under Vitest and node:test it
+  fails the run, and the mutants tried in it are decided again in isolation, one at a time.
+- **`.only`**: Vitest and Jest honour it within a file; under node:test and Mocha tzap runs every
+  test. A stray `.only` therefore narrows what Vitest and Jest analyse.
+- **Tests with nothing planned before one that is planned**: Vitest runs them, unmutated, since a
+  test may depend on what an earlier one left behind; the others skip them, and a test that then
+  takes another path is decided in isolation. The verdict is the same; the cost is not.
+
 ## Languages and frameworks
 
 | | Status |

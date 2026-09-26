@@ -13,6 +13,11 @@ export interface Try {
   N: number;
   /** Limit on loop back-edges before the try is declared hung. */
   L: number;
+  /**
+   * Time limit in ms, for a runner with no timeout of its own (node:test): a try that has not
+   * settled by then fails. Other runners keep the timeout the project configured.
+   */
+  T?: number;
 }
 
 /**

@@ -99,18 +99,24 @@ const HIT_FACTOR = 100;
 const HIT_FLOOR = 1000;
 const LOOP_FACTOR = 10;
 const LOOP_FLOOR = 100_000;
+const TIME_FACTOR = 10;
+const TIME_FLOOR_MS = 5000;
 
-/** A try's hit and loop limits: well above what the unmutated test needed, with floors. */
-export function limitsFor(t: TestRecord, site: number): Pick<Try, 'N' | 'L'> {
+/** Ten times what the test took unmutated, with a floor. */
+const timeLimit = (t: TestRecord) => Math.max(TIME_FLOOR_MS, Math.ceil(TIME_FACTOR * (t.duration ?? 0)));
+
+/** A try's hit, loop and time limits: well above what the unmutated test needed, with floors. */
+export function limitsFor(t: TestRecord, site: number): Pick<Try, 'N' | 'L' | 'T'> {
   return {
     N: Math.max(HIT_FLOOR, HIT_FACTOR * (t.hits.get(site) ?? 1)),
     L: Math.max(LOOP_FLOOR, LOOP_FACTOR * t.loops),
+    T: timeLimit(t),
   };
 }
 
 /** An unmutated try. Controls bracket each test's mutant tries in a warm round. */
 export function control(t: TestRecord): Try {
-  return { m: -1, N: Infinity, L: Math.max(LOOP_FLOOR, LOOP_FACTOR * t.loops) };
+  return { m: -1, N: Infinity, L: Math.max(LOOP_FLOOR, LOOP_FACTOR * t.loops), T: timeLimit(t) };
 }
 
 /**

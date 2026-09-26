@@ -34,7 +34,7 @@ import { pathToFileURL } from 'node:url';
 import { normPath as norm, sameHits, type FileOutcome, type RunMode, type RunRequest, type RunResult, type SessionOptions, type TestOutcome, type Try, type TryOutcome } from '@tzap/protocol';
 import { cleanUrl, firstMessage, InstrumentedModules, realPath, urlToNorm } from '@tzap/runner-kit';
 import { activateStatic, beginTry, drainHits, endTry, install, type TzapRuntime } from '@tzap/runtime';
-import { callHook, DEFAULT_TEST_TIMEOUT, findTestFiles, real, type Ctx, type Fn, type Register } from './node-test.js';
+import { callHook, findTestFiles, onSelfSkip, real, type Ctx, type Fn, type Register } from './node-test.js';
 
 const require = createRequire(import.meta.url);
 const selfUrl = import.meta.url;
@@ -86,6 +86,8 @@ interface Copy {
   ctx?: Ctx;
   started: number;
   skipped: boolean;
+  /** The test skipped itself (`t.skip()`, `t.todo()`). */
+  selfSkipped?: boolean;
   done: boolean;
 }
 
@@ -140,14 +142,15 @@ export class Executor {
   /** Modules (normalised path) re-evaluated every run: test files and whatever imports node:test. */
   private readonly reEval = new Set<string>();
   private readonly als = new AsyncLocalStorage<string[]>();
-  private readonly testTimeout: number;
+  /** A timeout for every test, overriding the engine's per-try limits (TZAP_NODE_TEST_TIMEOUT). */
+  private readonly testTimeout: number | undefined;
   private runCount = 0;
   private state: RunState | undefined;
   readonly allFiles: string[];
 
   constructor(private readonly o: ExecutorOptions) {
     this.pkgRoot = o.pkgRoot;
-    this.testTimeout = o.testTimeout ?? DEFAULT_TEST_TIMEOUT;
+    this.testTimeout = o.testTimeout;
     this.rt = install();
     this.modules = new InstrumentedModules(o.session.instrumented);
     this.allFiles = findTestFiles(this.pkgRoot, o.session.pkg.tests);
@@ -363,7 +366,12 @@ export class Executor {
     }
     if (copies === 0) return real.test(name, { ...opts, skip: 'tzap: not planned' }, fn);
     st.infos.push(info);
-    if (opts.timeout === undefined) opts.timeout = this.testTimeout;
+    // node:test has no default timeout, and neither has a coverage run. A mutant try gets the
+    // engine's time limit, so a promise a mutant leaves unsettled fails the try.
+    if (opts.timeout === undefined) {
+      const limits = (info.tries ?? []).map((t) => t.T ?? Infinity);
+      opts.timeout = this.testTimeout ?? (limits.length > 0 ? Math.max(...limits) : Infinity);
+    }
     let q = st.queues.get(key);
     if (!q) st.queues.set(key, (q = []));
     let ret: unknown;
@@ -476,6 +484,8 @@ export class Executor {
     this.finishPending();
     copy.ctx = t;
     st.current = copy;
+    // node:test reports a test that skips itself as passed; tzap counts it skipped, as `node --test` shows it.
+    onSelfSkip(t, () => (copy.selfSkipped = true));
     if (st.mode === 'coverage') {
       this.o.onProgress?.(st.req.id, copy.info.id, -1, false);
       this.collectOutside();
@@ -532,7 +542,7 @@ export class Executor {
         info.hits = hits;
         info.loops = this.rt.l;
         info.duration = elapsed;
-        info.state = failed ? 'fail' : 'pass';
+        info.state = copy.selfSkipped ? 'skip' : failed ? 'fail' : 'pass';
         if (failed) info.message = message;
         else if (hits.length === 0) info.noRepeat = true;
       } else if (copy.skipped) {

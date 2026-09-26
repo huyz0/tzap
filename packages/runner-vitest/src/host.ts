@@ -284,7 +284,8 @@ async function run(req: RunRequest): Promise<RunResult> {
         const state = r.state === 'passed' ? 'pass' : r.state === 'failed' ? 'fail' : 'skip';
         const m = t.meta();
         const out: TestOutcome = {
-          id: t.id,
+          // The worker's stable id (see worker-setup's assignIds); Vitest's own for a test it never saw.
+          id: typeof m.tzapId === 'string' ? m.tzapId : t.id,
           name: t.fullName,
           file: mod.moduleId,
           state,
@@ -313,7 +314,7 @@ async function run(req: RunRequest): Promise<RunResult> {
   return out;
 }
 
-serveHost({ label: 'the Vitest host', progressName: 'vitest', init });
+serveHost({ label: 'the Vitest host', progressName: 'vitest', init, testsElsewhere: true });
 
 /** Whether a process with this id exists. */
 function alive(pid: number): boolean {

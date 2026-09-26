@@ -1,5 +1,5 @@
 /**
- * The engine's side of a runner that runs in a host process of its own (node:test, Mocha): the
+ * The engine's side of a runner that runs in a host process of its own (every runner does): the
  * host is forked, spoken to over IPC, killed when a run goes silent, and replaced when a run must
  * start from nothing. Implements the engine's `RunnerSession` contract.
  *
@@ -7,7 +7,7 @@
  * - `isolate: true`: every run gets a host that has never run anything, so a static mutant is
  *   active before any module evaluates. The next host is started as soon as a run ends.
  */
-import { fork, type ChildProcess } from 'node:child_process';
+import { fork, spawnSync, type ChildProcess } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { readProgress, type HostRequest, type HostResponse, type RunRequest, type RunResult, type RunnerSession, type SessionOptions } from '@tzap/protocol';
@@ -44,6 +44,11 @@ const STDERR_TAIL = 8000;
 const CLOSE_TIMEOUT_MS = 5000;
 /** How often the wall-clock backstop reads the progress files, at most. */
 const BACKSTOP_POLL_MS = 500;
+/**
+ * Before a run's first try starts, the host loads and collects test files, which on a large
+ * suite can be slow: the silence window is this many times longer until then.
+ */
+const STARTUP_WINDOWS = 3;
 
 /** Where a host writes its progress file: by host process, so a replacement starts clean. */
 export function progressDir(tmpDir: string | undefined, name: string, pid: number | undefined): string {
@@ -69,8 +74,15 @@ class ProcessHost {
       execArgv: [],
       env: { ...process.env, NODE_OPTIONS: '' },
       serialization: 'advanced',
+      // Its own process group, so a kill reaches the worker processes a runner starts too: one
+      // stuck in a mutant's loop never notices its parent is gone.
+      detached: process.platform !== 'win32',
     });
     this.child = child;
+    // A message sent as the host dies fails here, not as an exception that takes the engine down.
+    child.on('error', (e) => {
+      this.stderr = (this.stderr + String(e)).slice(-STDERR_TAIL);
+    });
     this.ready = new Promise((resolve, reject) => (this.onReady = { resolve, reject }));
     this.ready.catch(() => {});
     child.stderr?.on('data', (d: Buffer) => {
@@ -145,8 +157,17 @@ class ProcessHost {
     });
   }
 
+  /** Kills the host and every process it started. */
   kill(): void {
-    if (!this.exited) this.child.kill('SIGKILL');
+    if (this.exited || this.child.pid === undefined) return;
+    const pid = this.child.pid;
+    try {
+      if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore' });
+      else process.kill(-pid, 'SIGKILL');
+    } catch {
+      // Already gone.
+    }
+    this.child.kill('SIGKILL');
   }
 
   /** Asks the host to close (its runner's teardown runs); kills it if it has not within a timeout. */
@@ -201,7 +222,8 @@ export class HostedSession implements RunnerSession {
     const tries = Object.values(request.plan ?? {}).reduce((a, l) => a + l.length, 0);
     const spent = !this.hostPerRun && this.tries > 0 && this.runner.recycle?.(this.tries, tries) === true;
     if (!host.alive || (this.hostPerRun && host.used) || spent) {
-      host.kill();
+      // A live host closes in the background, so its runner's teardown (and cleanup) runs.
+      void host.close();
       host = this.host = new ProcessHost(this.runner, this.options);
       this.tries = 0;
     }
@@ -226,9 +248,10 @@ export class HostedSession implements RunnerSession {
       const window = request.budgetMs;
       timer = setInterval(
         () => {
-          const entries = readProgress(dir).filter((e) => e.runId === request.id);
-          const last = Math.max(started, ...entries.map((e) => e.at));
-          if (Date.now() - last <= window) return;
+          // Some file systems keep modification times to the second: two of slack.
+          const entries = readProgress(dir, started - 2000).filter((e) => e.runId === request.id);
+          const last = entries.reduce((a, e) => Math.max(a, e.at), started);
+          if (Date.now() - last <= (entries.length > 0 ? window : window * STARTUP_WINDOWS)) return;
           clearInterval(timer);
           const inFlight = entries.filter((e) => !e.done).map((e) => ({ test: e.test, mutant: e.mutant }));
           host.abandon({ id: request.id, tests: [], files: [], timedOut: true, inFlight, durationMs: Date.now() - started });
@@ -254,8 +277,6 @@ export class HostedSession implements RunnerSession {
   async close(): Promise<void> {
     const host = this.host;
     this.host = undefined;
-    // A host that never ran anything (the one started ahead for an isolated run) holds no state.
-    if (host && !host.used) host.kill();
-    else await host?.close();
+    await host?.close();
   }
 }

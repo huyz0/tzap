@@ -120,6 +120,12 @@ function extend(Base: Env): Env {
     private readonly rt: TzapRuntime;
     private readonly recs = new Map<CircusTest, Rec>();
     private readonly outside = new Map<number, number>();
+    /**
+     * Mutants killed so far in this file: their later tries here are skipped. Per file, as under
+     * Vitest: Jest orders files by their last timings, so a set shared across files would change
+     * which test is credited from one round to the next.
+     */
+    private readonly killed = new Set<number>();
 
     constructor(...args: any[]) {
       super(...args);
@@ -219,7 +225,7 @@ function extend(Base: Env): Env {
       rec.started = performance.now();
       // m === -1 is a control try: the test unmutated, bracketing the mutant tries so the engine
       // can tell a test that fails because of its context from one that fails because of a mutant.
-      if (run.mode === 'mutate' && tr.m >= 0 && run.killed.has(tr.m)) {
+      if (run.mode === 'mutate' && tr.m >= 0 && this.killed.has(tr.m)) {
         this.rt.a = -1;
         // An error before the hooks: circus skips beforeEach and the body, runs afterEach.
         test.errors.push(SKIP_ERROR);
@@ -264,7 +270,7 @@ function extend(Base: Env): Env {
           else if (hung) outcome = 'T';
           else if (run.mode === 'mutate' && tr.m >= 0 && !reached) outcome = 'U';
           else outcome = failed ? 'K' : 'S';
-          if ((outcome === 'K' || outcome === 'T') && tr.m >= 0) run.killed.add(tr.m);
+          if ((outcome === 'K' || outcome === 'T') && tr.m >= 0) this.killed.add(tr.m);
           rec.tries.push(outcome === 'K' && msg !== undefined ? [tr.m, outcome, msg] : [tr.m, outcome]);
         }
       }
@@ -296,11 +302,8 @@ function extend(Base: Env): Env {
           if (rec.repeatFail !== undefined) out.stateSensitive = `fails when repeated: ${rec.repeatFail}`;
           else if (rec.hits && rec.hits2 && !sameHits(rec.hits, rec.hits2)) out.stateSensitive = 'takes a different path when repeated';
         } else if (rec.plan.length > 0) {
-          // A try that never ran (a beforeAll failed, say) decided nothing: unreached.
-          if (run.mode === 'mutate') for (let i = rec.tries.length; i < rec.plan.length; i++) {
-            const m = rec.plan[i]!.m;
-            rec.tries.push(m >= 0 ? [m, 'U'] : [m, 'K', 'tzap: control try did not run']);
-          }
+          // A try that never ran (a beforeAll failed, say) is left out: it decided nothing, and
+          // the engine tries it again, as with every runner.
           out.tries = rec.tries;
         }
         run.tests.push(out);

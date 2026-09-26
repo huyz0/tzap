@@ -36,8 +36,11 @@ export function progressWriter(dir: string | undefined, id: string): ((runId: nu
   };
 }
 
-/** On the engine side: every worker's latest entry. */
-export function readProgress(dir: string): ProgressEntry[] {
+/**
+ * On the engine side: every worker's latest entry. With `since`, files not written since then
+ * (workers of earlier runs) are passed over after a stat, not read.
+ */
+export function readProgress(dir: string, since = 0): ProgressEntry[] {
   const out: ProgressEntry[] = [];
   let names: string[] = [];
   try {
@@ -49,8 +52,10 @@ export function readProgress(dir: string): ProgressEntry[] {
     if (!n.endsWith('.progress')) continue;
     const f = path.join(dir, n);
     try {
+      const at = statSync(f).mtimeMs;
+      if (at < since) continue;
       const [runId, mutant, done, ...test] = readFileSync(f, 'utf8').trimEnd().split('\t');
-      out.push({ runId: Number(runId), mutant: Number(mutant), done: done === '1', test: test.join('\t'), at: statSync(f).mtimeMs });
+      out.push({ runId: Number(runId), mutant: Number(mutant), done: done === '1', test: test.join('\t'), at });
     } catch {
       // A file being rewritten this instant is read again on the next poll.
     }

@@ -10,6 +10,7 @@
  * records the outcome in `task.meta` and clears the failure so the next repetition starts clean.
  */
 import { activateStatic, beginTry, drainHits, endTry, install, type TzapRuntime } from '@tzap/runtime';
+import path from 'node:path';
 import { threadId } from 'node:worker_threads';
 import { normPath, PROGRESS_DIR_ENV, progressWriter, type RunMode, type Try, type TryOutcome } from '@tzap/protocol';
 
@@ -68,6 +69,32 @@ function walk(suite: Task, f: (t: Task) => void): void {
   }
 }
 
+/**
+ * Stable test ids, as every tzap runner names tests: `file::suite > name`, with ` #n` for the nth
+ * test of the same name in a file. Vitest's own ids count positions, so adding a test renames the
+ * ones after it; and a report should name the test.
+ */
+function assignIds(file: Task & { filepath?: string }): void {
+  const rel = path.relative(process.cwd(), file.filepath ?? file.name).replace(/\\/g, '/');
+  const seen = new Map<string, number>();
+  const visit = (suite: Task, names: string[]) => {
+    for (const t of suite.tasks ?? []) {
+      const here = [...names, t.name];
+      if (t.type !== 'test') {
+        visit(t, here);
+        continue;
+      }
+      const name = here.join(' > ');
+      const n = seen.get(name) ?? 0;
+      seen.set(name, n + 1);
+      t.meta.tzapId = `${rel}::${name}${n > 0 ? ` #${n + 1}` : ''}`;
+    }
+  };
+  visit(file, []);
+}
+
+const idOf = (t: Task) => (typeof t.meta.tzapId === 'string' ? t.meta.tzapId : t.id);
+
 const firstMessage = (t: Task) => {
   const m = t.result?.errors?.[0]?.message;
   return m === undefined ? undefined : m.length > 300 ? `${m.slice(0, 297)}...` : m;
@@ -87,6 +114,8 @@ export function setup(vitest: Vitest): void {
     ws.killed = new Set();
   }
   if (ws.progress === null) ws.progress = progressWriter(process.env[PROGRESS_DIR_ENV], `${process.pid}-${threadId}`);
+  // Registered first, so it runs before every other hook of the file.
+  vitest.beforeAll(({}, file) => assignIds(file));
 
   if (payload.mode === 'coverage') {
     setupCoverage(vitest, rt);
@@ -111,10 +140,10 @@ export function setup(vitest: Vitest): void {
     walk(file, (t) => all.push(t));
     let last = -1;
     all.forEach((t, i) => {
-      if (plan[t.id]?.length) last = i;
+      if (plan[idOf(t)]?.length) last = i;
     });
     all.forEach((t, i) => {
-      const tries = plan[t.id];
+      const tries = plan[idOf(t)];
       if (!tries || tries.length === 0) {
         if (i > last && (t.mode === 'run' || t.mode === 'queued')) t.mode = 'skip';
         t.concurrent = false;
@@ -128,7 +157,7 @@ export function setup(vitest: Vitest): void {
   });
 
   vitest.beforeEach(({ task }) => {
-    const tries = plan[task.id];
+    const tries = plan[idOf(task)];
     if (!tries) return;
     // Vitest keeps unawaited `expect(...).resolves` promises on the test and awaits them after
     // every repetition: one that a previous try left hanging would time out every later try.
@@ -142,16 +171,16 @@ export function setup(vitest: Vitest): void {
       rt.a = -1;
       throw new Error(SKIP);
     }
-    ws.progress?.(payload.runId, task.id, tr.m, false);
+    ws.progress?.(payload.runId, idOf(task), tr.m, false);
     beginTry(rt, payload.mode === 'static' ? staticMutant : tr.m, tr.N, tr.L);
   });
 
   vitest.afterEach(({ task }) => {
-    const tries = plan[task.id];
+    const tries = plan[idOf(task)];
     if (!tries) return;
     const i = task.result?.repeatCount ?? 0;
     const tr = tries[i]!;
-    ws.progress?.(payload.runId, task.id, tr.m, true);
+    ws.progress?.(payload.runId, idOf(task), tr.m, true);
     const reached = rt.n > 0;
     const { hung } = endTry(rt);
     if (payload.mode === 'static') activateStatic(rt, staticMutant, payload.staticLimit);

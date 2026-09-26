@@ -141,7 +141,6 @@ async function run(req: RunRequest): Promise<RunResult> {
     staticMutant: req.staticMutant ?? -1,
     ...(req.staticLimit !== undefined ? { staticLimit: req.staticLimit } : {}),
     jestMajor,
-    killed: new Set(),
     rootDir,
     tests: [],
     staticHits: new Map(),
@@ -194,14 +193,6 @@ async function run(req: RunRequest): Promise<RunResult> {
       files.push(fo);
     }
     tests.push(...state.tests);
-    if (req.mode === 'mutate') {
-      // A planned test that never reported (its file failed to load, say) decided nothing.
-      const seen = new Set(tests.map((t) => t.id));
-      for (const [id, tries] of Object.entries(state.plan)) {
-        if (seen.has(id)) continue;
-        tests.push({ id, name: id, file: '', state: 'skip', duration: 0, tries: tries.map((t) => (t.m >= 0 ? [t.m, 'U'] : [t.m, 'K', 'tzap: test did not run'])) });
-      }
-    }
   } finally {
     delete (globalThis as unknown as Record<string, unknown>)[STATE_KEY];
   }

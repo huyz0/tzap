@@ -26,8 +26,6 @@ export interface NodeTest extends Register {
 /** node:test itself, as the executor's shim wraps it. */
 export const real = createRequire(import.meta.url)('node:test') as NodeTest;
 
-/** How long a test may run when the project sets no timeout. */
-export const DEFAULT_TEST_TIMEOUT = 5000;
 
 /** node:test's default patterns (`--test` with no arguments), with type stripping's extensions. */
 const EXT = '{js,mjs,cjs,ts,mts,cts}';
@@ -60,4 +58,17 @@ export function callHook(fn: Fn, t: Ctx): Promise<unknown> {
   return new Promise((resolve, reject) => {
     fn.call(t, t, (err?: unknown) => (err ? reject(err) : resolve(undefined)));
   });
+}
+
+/** Calls `then` when the test skips itself through its context (`t.skip()`, `t.todo()`). */
+export function onSelfSkip(t: Ctx, then: () => void): void {
+  const ctx = t as unknown as Record<string, unknown>;
+  for (const m of ['skip', 'todo']) {
+    const orig = ctx[m];
+    if (typeof orig !== 'function') continue;
+    ctx[m] = (...args: unknown[]) => {
+      then();
+      return (orig as (...a: unknown[]) => unknown).apply(t, args);
+    };
+  }
 }

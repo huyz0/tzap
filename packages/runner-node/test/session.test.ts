@@ -14,6 +14,7 @@ const hazards = path.join(here, '../fixtures/hazards');
 const repeat = path.join(here, '../fixtures/repeat');
 const loadLoop = path.join(here, '../fixtures/load-loop');
 const fileHooks = path.join(here, '../fixtures/file-hooks');
+const strays = path.join(here, '../fixtures/strays');
 
 interface Prepared {
   tmp: string;
@@ -370,6 +371,46 @@ describe('coverage repeats', () => {
       await s.close();
       rmSync(p.tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe('what a test does outside its own result', () => {
+  let p: Prepared;
+  let s: NodeTestSession;
+  const id = (name: string) => `test/strays.test.ts::${name}`;
+  beforeAll(async () => {
+    p = prepare(strays, ['src/free.ts']);
+    s = new NodeTestSession({ root: strays, pkg: pkgOf(strays), instrumented: p.instrumented, tmpDir: p.tmp });
+    await s.start();
+  });
+  afterAll(async () => {
+    await s?.close();
+    rmSync(p.tmp, { recursive: true, force: true });
+  });
+
+  it('counts a test that skips itself as skipped', async () => {
+    const res = await s.run({ id: 1, mode: 'coverage' });
+    expect(byId(res, id('skips itself')).state).toBe('skip');
+    expect(byId(res, id('exits')).state).toBe('pass');
+  });
+
+  it('fails the run with an error a timer throws after its test, rather than losing it', async () => {
+    const neg = find(p, 'src/free.ts', 2, 'price !== 0');
+    const res = await s.run({ id: 2, mode: 'mutate', plan: { [id('throws from a timer')]: [control, tryOf(neg), control] } });
+    expect(res.unhandledErrors?.some((e) => e.includes('late'))).toBe(true);
+  });
+
+  it('fails a try that calls process.exit, and keeps the host', async () => {
+    const neg = find(p, 'src/free.ts', 2, 'price !== 0');
+    const res = await s.run({ id: 3, mode: 'mutate', plan: { [id('exits')]: [control, tryOf(neg), control] } });
+    const tries = byId(res, id('exits')).tries!;
+    expect(tries.map(([m, o]) => [m, o])).toEqual([
+      [-1, 'S'],
+      [neg.num, 'K'],
+      [-1, 'S'],
+    ]);
+    expect(tries[1]![2]).toMatch(/process\.exit\(1\) called during a test run/);
+    expect((await s.run({ id: 4, mode: 'mutate', plan: { [id('exits')]: [control] } })).tests[0]!.tries).toEqual([[-1, 'S']]);
   });
 });
 
