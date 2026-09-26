@@ -162,6 +162,18 @@ describe('diff scoping', () => {
     expect(r.mutants.map((x) => x.location.start.line)).toEqual([5, 5, 5, 5, 5]);
     expect(r.config.scope).toBe('diff');
   });
+
+  it('narrows the coverage phase to tests that can reach the change, without changing a verdict', async () => {
+    const m: ProjectModel = { ...model(repo), packages: [{ id: 'fixture', root: 'fixtures/hazards-vitest', sources: ['src/**/*.ts'], runner: { kind: 'vitest' } }] };
+    const full = await run(m);
+    const lines = new Map([['fixtures/hazards-vitest/src/math.ts', [[1, 11]] as const]]);
+    const events: string[] = [];
+    const narrowed = await run(m, { lines, onEvent: (e) => e.type === 'narrowed' && events.push(`${e.files}/${e.of}`) });
+    // math.ts is imported by two of the six test files.
+    expect(events).toEqual(['2/6']);
+    const inScope = Object.fromEntries(Object.entries(verdicts(full)).filter(([k]) => k.includes('/math.ts:')));
+    expect(verdicts(narrowed)).toEqual(inScope);
+  }, 240_000);
 });
 
 describe('the command line', () => {

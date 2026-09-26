@@ -274,6 +274,7 @@ process.on('message', (msg: HostRequest) => {
     try {
       if (msg.type === 'init') await init(msg.options);
       else if (msg.type === 'run') send({ type: 'result', result: await run(msg.request) });
+      else if (msg.type === 'list') send({ type: 'files', files: [...new Set((await vitest!.globTestSpecifications()).map((s) => s.moduleId))] });
       else if (msg.type === 'close') {
         await vitest?.close();
         process.exit(0);

@@ -57,6 +57,7 @@ export type EngineEvent =
   | { type: 'phase'; phase: string }
   | { type: 'inventory'; files: number; mutants: number; placed: number }
   | { type: 'coverage'; tests: number; red: number }
+  | { type: 'narrowed'; pkg: string; files: number; of: number }
   | { type: 'round'; round: number; tries: number; ms: number }
   | { type: 'progress'; decided: number; total: number }
   | { type: 'warning'; message: string };
@@ -251,6 +252,18 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
 
   let runId = 1;
   const warm = new Map<string, RunnerSession>();
+  const graph = new ImportGraph({
+    workspacePackages: new Map(model.packages.map((p) => [p.id, path.resolve(root, p.root)])),
+  });
+  const packageFiles = new Map(model.packages.map((p) => [p.id, sourceFiles(root, p)]));
+  // A diff run's coverage phase runs only the test files that can reach a file with mutants.
+  const mutatedFiles = new Set(placed.map((d) => toPosix(path.resolve(root, d.file)).toLowerCase()));
+  const reachesMutated = (testFile: string) => {
+    const c = graph.closure(testFile);
+    if (c.dynamic) return true;
+    if (c.files.some((f) => mutatedFiles.has(toPosix(f).toLowerCase()))) return true;
+    return c.packages.some((pkg) => (packageFiles.get(pkg) ?? []).some((f) => mutatedFiles.has(toPosix(f).toLowerCase())));
+  };
   const tests = new Map<string, TestRecord>();
   const staticSites = new Map<number, Set<string>>(); // site -> test files (absolute) that reached it outside tests
   const allTestFiles = new Map<string, Set<string>>(); // pkg id -> test files
@@ -259,7 +272,13 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       const s = sessionFor(pkg);
       await s.start();
       warm.set(pkg.id, s);
-      const res = await s.run({ id: runId++, mode: 'coverage' });
+      let files: string[] | undefined;
+      if (options.lines && s.listFiles) {
+        const all = await s.listFiles();
+        files = all.filter(reachesMutated);
+        emit({ type: 'narrowed', pkg: pkg.id, files: files.length, of: all.length });
+      }
+      const res = files && files.length === 0 ? { id: 0, tests: [], files: [], durationMs: 0 } : await s.run({ id: runId++, mode: 'coverage', files });
       const filesOfPkg = new Set<string>();
       for (const f of res.files) {
         filesOfPkg.add(f.file);
@@ -299,10 +318,6 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
     }
 
     // Import closures: the cache's key for "nothing this test can reach has changed".
-    const graph = new ImportGraph({
-      workspacePackages: new Map(model.packages.map((p) => [p.id, path.resolve(root, p.root)])),
-    });
-    const packageFiles = new Map(model.packages.map((p) => [p.id, sourceFiles(root, p)]));
     let everything: string | undefined;
     const everythingHash = () => {
       if (everything) return everything;

@@ -101,6 +101,8 @@ export interface SessionOptions {
 export interface RunnerSession {
   readonly kind: string;
   start(): Promise<{ runnerVersion: string }>;
+  /** Absolute paths of every test file the runner would run. Optional: without it, a diff run cannot narrow its coverage phase. */
+  listFiles?(): Promise<string[]>;
   run(request: RunRequest): Promise<RunResult>;
   close(): Promise<void>;
 }
@@ -112,11 +114,13 @@ export type RunnerFactory = (options: SessionOptions) => RunnerSession;
 export type HostRequest =
   | { type: 'init'; options: SessionOptions }
   | { type: 'run'; request: RunRequest }
+  | { type: 'list' }
   | { type: 'close' };
 
 export type HostResponse =
   | { type: 'ready'; runnerVersion: string }
   | { type: 'result'; result: RunResult }
+  | { type: 'files'; files: string[] }
   | { type: 'progress'; runId: number; test: string; mutant: number }
   | { type: 'error'; message: string; during: 'init' | 'run' | 'background' };
 

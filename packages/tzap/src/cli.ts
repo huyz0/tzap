@@ -10,12 +10,12 @@
  *
  * Exit codes: 0 met the bar, 1 did not (threshold or survivors), 2 usage error, 3 analysis failed.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { analyse, type EngineEvent } from '@tzap/core';
 import { discover } from '@tzap/discover';
-import { gitChangedLines, parseUnifiedDiff, type ChangedLines } from '@tzap/git';
+import { gitChangedLines, parseUnifiedDiff, type ChangedLines, type LineRange } from '@tzap/git';
 import { ALL_MUTATORS, aridFilters, instrument } from '@tzap/instrument';
 import { ModelValidationError, parseModel, score, serialiseModel, type ProjectModel, type ScopeSpec } from '@tzap/model';
 import { reporters as reporterRegistry, writeReports } from '@tzap/report';
@@ -120,7 +120,18 @@ async function resolveScope(model: ProjectModel, values: Record<string, unknown>
   const patch = values.patch as string | undefined;
   const scope: ScopeSpec | undefined = patch || from || to ? { kind: 'diff', from, to, patch } : model.scope;
   if (!scope || scope.kind === 'full') return undefined;
-  if (scope.patch) return parseUnifiedDiff(readFileSync(path.resolve(cwd, scope.patch), 'utf8'), { root: model.root, stripPrefix: 1 });
+  if (scope.patch) {
+    // Paths in a patch are relative to wherever it was made: usually the repository root, as
+    // git writes them, sometimes the current directory. Take whichever names a real file.
+    const parsed = parseUnifiedDiff(readFileSync(path.resolve(cwd, scope.patch), 'utf8'));
+    const files = new Map<string, LineRange[]>();
+    for (const [p, ranges] of parsed.files) {
+      const fromRoot = path.resolve(model.root, p);
+      const abs = existsSync(fromRoot) ? fromRoot : path.resolve(cwd, p);
+      files.set(relativeTo(model.root, abs), ranges as LineRange[]);
+    }
+    return { ...parsed, files };
+  }
   return gitChangedLines({ cwd: model.root, root: model.root, from: scope.from, to: scope.to });
 }
 
@@ -132,6 +143,9 @@ function progress(quiet: boolean) {
     switch (e.type) {
       case 'inventory':
         line = `tzap: ${e.mutants} mutants in ${e.files} files (${e.placed} to run)`;
+        break;
+      case 'narrowed':
+        line = `tzap: coverage narrowed to ${e.files} of ${e.of} test files in ${e.pkg}: only those that can import a changed file`;
         break;
       case 'coverage':
         line = `tzap: coverage from ${e.tests} tests${e.red ? `, ${e.red} failing without any mutant (excluded)` : ''}`;

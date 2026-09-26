@@ -13,6 +13,7 @@ export class VitestSession implements RunnerSession {
   private readonly inFlight = new Map<string, number>();
   private starting: { resolve: (v: { runnerVersion: string }) => void; reject: (e: Error) => void } | undefined;
   private stderr = '';
+  private listing: ((files: string[]) => void) | undefined;
 
   constructor(private readonly options: SessionOptions) {}
 
@@ -56,6 +57,10 @@ export class VitestSession implements RunnerSession {
         this.starting?.resolve({ runnerVersion: m.runnerVersion });
         this.starting = undefined;
         break;
+      case 'files':
+        this.listing?.(m.files);
+        this.listing = undefined;
+        break;
       case 'progress':
         if (this.pending && m.runId === this.pending.id) this.inFlight.set(m.test, m.mutant);
         break;
@@ -78,6 +83,14 @@ export class VitestSession implements RunnerSession {
         }
         break;
     }
+  }
+
+  listFiles(): Promise<string[]> {
+    if (!this.child) return Promise.reject(new Error('the Vitest host is not running'));
+    return new Promise((resolve) => {
+      this.listing = resolve;
+      this.send({ type: 'list' });
+    });
   }
 
   run(request: RunRequest): Promise<RunResult> {

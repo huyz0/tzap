@@ -7,7 +7,7 @@
     "node": ">=22.12"
   },
   "scripts": {
-    "build": "tsc -b packages/tzap",
+    "build": "tsc -b --force packages/tzap",
     "clean": "node scripts/clean.mjs",
     "test": "vitest run",
     "check:boundaries": "node scripts/check-boundaries.mjs",
