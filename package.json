@@ -10,7 +10,8 @@
     "build": "tsc -b --force packages/tzap",
     "test": "vitest run",
     "check:boundaries": "node scripts/check-boundaries.mjs",
-    "check": "pnpm build && pnpm check:boundaries && pnpm test",
+    "check:size": "node scripts/check-size.mjs",
+    "check": "pnpm build && pnpm check:boundaries && pnpm check:size && pnpm test",
     "coverage": "node scripts/coverage.mjs --threshold 95",
     "bundle": "node scripts/bundle.mjs",
     "smoke:pack": "node scripts/pack-smoke.mjs"

@@ -49,10 +49,8 @@ type TestCase = {
 };
 
 let vitest: Vitest | undefined;
-let options: SessionOptions;
 
 async function init(o: SessionOptions): Promise<void> {
-  options = o;
   const pkgRoot = path.resolve(o.root, o.pkg.root);
   process.chdir(pkgRoot);
   for (const [k, v] of Object.entries(o.pkg.env ?? {})) process.env[k] = v;

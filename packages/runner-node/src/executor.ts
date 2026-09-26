@@ -26,63 +26,17 @@
  *   file's own tests rather than around the whole run.
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { globSync, mkdirSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import * as nodeModule from 'node:module';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { normPath as norm, sameHits, type FileOutcome, type RunMode, type RunRequest, type RunResult, type SessionOptions, type TestOutcome, type Try, type TryOutcome } from '@tzap/protocol';
 import { cleanUrl, firstMessage, InstrumentedModules, realPath, urlToNorm } from '@tzap/runner-kit';
 import { activateStatic, beginTry, drainHits, endTry, install, type TzapRuntime } from '@tzap/runtime';
+import { callHook, DEFAULT_TEST_TIMEOUT, findTestFiles, real, type Ctx, type Fn, type Register } from './node-test.js';
 
 const require = createRequire(import.meta.url);
-
-/** The subset of a node:test TestContext the executor reads. */
-interface Ctx {
-  name: string;
-  fullName: string;
-  filePath?: string;
-  passed: boolean;
-  error: unknown;
-}
-type Fn = (...args: unknown[]) => unknown;
-type Register = ((name?: unknown, options?: unknown, fn?: unknown) => unknown) & Record<string, unknown>;
-interface NodeTest extends Register {
-  test: Register;
-  describe: Register;
-  before: (fn: Fn, options?: object) => void;
-  after: (fn: Fn, options?: object) => void;
-  beforeEach: (fn: Fn, options?: object) => void;
-  afterEach: (fn: Fn, options?: object) => void;
-  run: (options: object) => NodeJS.ReadableStream & { on(ev: string, f: (e: unknown) => void): unknown; resume(): unknown };
-}
-
-const real = require('node:test') as NodeTest;
-
-/** node:test's default patterns (`--test` with no arguments), with type stripping's extensions. */
-const EXT = '{js,mjs,cjs,ts,mts,cts}';
-export const NODE_TEST_PATTERNS = [
-  `**/*.test.${EXT}`,
-  `**/*-test.${EXT}`,
-  `**/*_test.${EXT}`,
-  `**/test-*.${EXT}`,
-  `**/test.${EXT}`,
-  `**/test/**/*.${EXT}`,
-];
-
-export function findTestFiles(pkgRoot: string, patterns: readonly string[] | undefined): string[] {
-  const globs = patterns && patterns.length > 0 ? patterns : NODE_TEST_PATTERNS;
-  const found = new Set<string>();
-  for (const g of globs) {
-    for (const f of globSync(g, { cwd: pkgRoot, exclude: (p: string) => /(^|[\\/])node_modules([\\/]|$)/.test(p) || /(^|[\\/])\.tzap([\\/]|$)/.test(p) })) {
-      if (/(^|[\\/])node_modules[\\/]/.test(f)) continue;
-      if (!/\.(c|m)?[jt]s$/.test(f)) continue;
-      found.add(path.resolve(pkgRoot, f));
-    }
-  }
-  return [...found].sort();
-}
-
 const selfUrl = import.meta.url;
 
 /** Normalised path of the first stack frame outside this module. */
@@ -105,15 +59,6 @@ function callerFile(): string | undefined {
 
 const SKIP = 'tzap: skipped, mutant already killed in this run';
 const NO_REPEAT = 'tzap: not repeated, the first run reached no mutant';
-
-/** Calls a `before`/`after` hook as node:test would: a second parameter is a `done` callback. */
-function callHook(fn: Fn, t: Ctx): Promise<unknown> {
-  if (fn.length < 2) return Promise.resolve().then(() => fn.call(t, t));
-  return new Promise((resolve, reject) => {
-    fn.call(t, t, (err?: unknown) => (err ? reject(err) : resolve(undefined)));
-  });
-}
-export const DEFAULT_TEST_TIMEOUT = 5000;
 
 interface TestInfo {
   id: string;
@@ -198,7 +143,6 @@ export class Executor {
   private readonly testTimeout: number;
   private runCount = 0;
   private state: RunState | undefined;
-  private endRun: (() => void) | undefined;
   readonly allFiles: string[];
 
   constructor(private readonly o: ExecutorOptions) {

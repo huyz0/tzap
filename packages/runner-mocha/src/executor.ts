@@ -1,7 +1,7 @@
 /**
  * Runs Mocha suites inside the current process, warm, many mutants per run.
  *
- * How (measured in the package tests; see the final notes in docs/spikes/C-bun-deno.md):
+ * How (measured in docs/spikes/C-bun-deno.md):
  *
  * - Mocha is loaded from the user's project and driven through its programmatic API, configured
  *   from the project's own `.mocharc.*` / `package.json` the way the `mocha` CLI reads them
@@ -22,109 +22,17 @@
  * - The runner's `test` event (emitted before any beforeEach hook) activates the try's mutant; a
  *   root `afterEach` kept last records the outcome after every user hook has run.
  */
-import { existsSync, readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import * as nodeModule from 'node:module';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { normPath as norm, sameHits, type FileOutcome, type RunMode, type RunRequest, type RunResult, type SessionOptions, type TestOutcome, type Try, type TryOutcome } from '@tzap/protocol';
 import { firstMessage, InstrumentedModules } from '@tzap/runner-kit';
 import { activateStatic, beginTry, drainHits, endTry, install, type TzapRuntime } from '@tzap/runtime';
-
-// --- the parts of Mocha the executor uses -----------------------------------------------------
-
-interface MochaRunnable {
-  type: 'test' | 'hook';
-  title: string;
-  originalTitle?: string;
-  file?: string;
-  parent?: MochaSuite;
-  err?: unknown;
-  ctx?: { currentTest?: MochaTest };
-}
-interface MochaTest extends MochaRunnable {
-  type: 'test';
-  fn?: unknown;
-  state?: 'passed' | 'failed' | 'pending';
-  pending: boolean;
-  titlePath(): string[];
-  fullTitle(): string;
-  isPending(): boolean;
-  clone(): MochaTest;
-  retries(n: number): unknown;
-  currentRetry(): number;
-  retriedTest(): MochaTest | undefined;
-}
-interface MochaHook extends MochaRunnable {
-  type: 'hook';
-  fn?: unknown;
-}
-interface MochaSuite {
-  title: string;
-  file?: string;
-  root: boolean;
-  parent?: MochaSuite;
-  tests: MochaTest[];
-  suites: MochaSuite[];
-  _beforeEach: MochaHook[];
-  _afterEach: MochaHook[];
-  _bail: boolean;
-  _onlyTests: MochaTest[];
-  _onlySuites: MochaSuite[];
-  afterEach(title: string, fn: (this: { currentTest?: MochaTest }) => void): unknown;
-}
-interface MochaRunner {
-  on(event: string, f: (...args: any[]) => void): unknown;
-  _eventListeners?: Map<object, Map<string, Set<(...args: any[]) => void>>>;
-}
-interface MochaInstance {
-  suite: MochaSuite;
-  files: string[];
-  version: string;
-  cleanReferencesAfterRun(b: boolean): unknown;
-  loadFilesAsync(): Promise<void>;
-  run(fn: (failures: number) => void): MochaRunner;
-  hasGlobalSetupFixtures(): boolean;
-  hasGlobalTeardownFixtures(): boolean;
-  runGlobalSetup(context: object): Promise<object>;
-  runGlobalTeardown(context: object): Promise<object>;
-}
-type MochaCtor = (new (options: object) => MochaInstance) & { interfaces: Record<string, unknown> };
-type Options = Record<string, unknown> & { _?: unknown[] };
-interface MochaCli {
-  loadOptions(argv: string[]): Options;
-  collectFiles(o: { ignore: string[]; extension: string[]; file: string[]; recursive: boolean; sort: boolean; spec: string[] }): string[] | { files: string[]; unmatchedFiles: unknown[] };
-  handleRequires(requires: string[], o?: object): Promise<Record<string, unknown>>;
-  validateLegacyPlugin?(o: Options, type: string, map: Record<string, unknown>): void;
-}
+import { list, loadMocha, type MochaCli, type MochaCtor, type MochaHook, type MochaInstance, type MochaRunnable, type MochaRunner, type MochaSuite, type MochaTest, type Options } from './mocha.js';
+import { NEXT, wrapHook, wrapTest, type TryState } from './wrap.js';
 
 // --- helpers ------------------------------------------------------------------------------------
-
-const list = (v: unknown): string[] =>
-  v === undefined || v === null || v === false ? [] : (Array.isArray(v) ? v : [v]).flatMap((x) => String(x).split(/ *, */)).filter((x) => x !== '');
-
-/** Mocha's `this.skip()` signal: PendingError in Mocha 12, a plain Pending object before. */
-const isPendingSignal = (e: unknown) => {
-  const name = (e as { constructor?: { name?: string } } | null)?.constructor?.name;
-  return name === 'PendingError' || name === 'Pending';
-};
-
-type AnyFn = (this: unknown, ...args: unknown[]) => unknown;
-
-/**
- * Fails a try that is not its test's last, so Mocha's retry loop runs the next. Made once: a new
- * Error per try would capture a stack every time.
- */
-const NEXT = Object.assign(new Error('tzap: next try'), { stack: 'tzap: next try' });
-const WRAPPED = Symbol.for('tzap.mocha.wrapped');
-
-/** A function standing in for `orig`: same arity (Mocha reads it to tell callback style) and source. */
-function standIn(orig: AnyFn, w: AnyFn): AnyFn {
-  Object.defineProperty(w, 'length', { value: orig.length });
-  Object.defineProperty(w, 'toString', { value: () => orig.toString() });
-  (w as unknown as Record<symbol, boolean>)[WRAPPED] = true;
-  return w;
-}
 
 /** `"before each" hook: name for "test"` -> 'each' / 'all', or undefined. */
 const hookKind = (h: MochaRunnable): 'each' | 'all' | undefined => {
@@ -163,18 +71,10 @@ interface Entry {
 }
 
 /** One try of a test: the original test object first, then Mocha's retry clones. */
-interface Copy {
+interface Copy extends TryState {
   info: TestInfo;
-  index: number;
-  total: number;
   test: MochaTest;
   started: number;
-  /** The mutant was already killed in this run: nothing of the user's runs. */
-  skipped: boolean;
-  error: unknown;
-  /** A beforeEach/afterEach hook failed around this try: the try failed, its body is not run. */
-  hookFailed: boolean;
-  done: boolean;
 }
 
 interface RunState {
@@ -202,7 +102,6 @@ export class Executor {
   readonly allFiles: string[];
   running = false;
   private readonly pkgRoot: string;
-  private readonly mochaDir: string;
   private readonly cli: MochaCli;
   private readonly options: Options;
   private readonly modules: InstrumentedModules;
@@ -223,65 +122,11 @@ export class Executor {
     this.modules = new InstrumentedModules(o.session.instrumented);
     this.installHooks();
 
-    // Mocha from the user's project, never one of tzap's own.
-    const req = createRequire(path.join(this.pkgRoot, 'package.json'));
-    let pkgJson: string;
-    try {
-      pkgJson = req.resolve('mocha/package.json');
-    } catch {
-      throw new Error(`mocha is not installed where Node resolves it from ${this.pkgRoot}`);
-    }
-    this.mochaDir = path.dirname(pkgJson);
-    this.version = (JSON.parse(readFileSync(pkgJson, 'utf8')) as { version: string }).version;
-    // Mocha 12 names its CommonJS files .cjs; Mocha 11 names them .js.
-    const lib = (name: string) => {
-      const base = path.join(this.mochaDir, 'lib', name);
-      return req(existsSync(`${base}.cjs`) ? `${base}.cjs` : `${base}.js`);
-    };
-    const options = lib('cli/options') as { loadOptions: MochaCli['loadOptions'] };
-    const helpers = lib('cli/run-helpers') as Pick<MochaCli, 'handleRequires' | 'validateLegacyPlugin'>;
-    this.cli = {
-      loadOptions: options.loadOptions,
-      collectFiles: lib('cli/collect-files') as MochaCli['collectFiles'],
-      handleRequires: helpers.handleRequires,
-      validateLegacyPlugin: helpers.validateLegacyPlugin,
-    };
-    const config = o.session.pkg.runner?.config;
-    const opts = this.cli.loadOptions(config ? ['--config', path.resolve(o.session.root, config)] : []);
-    for (const k of Object.keys(opts)) {
-      if (!k.includes('-')) continue;
-      const camel = k.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
-      if (!(camel in opts)) opts[camel] = opts[k];
-    }
-    this.options = opts;
-    this.allFiles = this.findTestFiles();
-  }
-
-  /** The test files `mocha` would run, in its order; the model's `tests` globs replace its spec. */
-  private findTestFiles(): string[] {
-    const o = this.options;
-    const tests = this.o.session.pkg.tests;
-    if (tests && tests.length === 0) return [];
-    const spec = tests && tests.length > 0 ? tests : (o._ ?? []).map(String);
-    const r = this.cli.collectFiles({
-      ignore: list(o.ignore),
-      extension: list(o.extension),
-      file: tests && tests.length > 0 ? [] : list(o.file),
-      recursive: o.recursive === true,
-      sort: o.sort === true,
-      spec: spec.length > 0 ? spec : ['./test'],
-    });
-    const files = Array.isArray(r) ? r : r.files;
-    const seen = new Set<string>();
-    const out: string[] = [];
-    for (const f of files) {
-      const abs = path.resolve(this.pkgRoot, f);
-      if (/(^|[\\/])node_modules[\\/]/.test(path.relative(this.pkgRoot, abs))) continue;
-      if (seen.has(norm(abs))) continue;
-      seen.add(norm(abs));
-      out.push(abs);
-    }
-    return out;
+    const mocha = loadMocha(this.pkgRoot, o.session);
+    this.version = mocha.version;
+    this.cli = mocha.cli;
+    this.options = mocha.options;
+    this.allFiles = mocha.files;
   }
 
   // --- module hooks --------------------------------------------------------------------------
@@ -400,7 +245,7 @@ export class Executor {
       suite._onlyTests = [];
       suite._onlySuites = [];
       for (const t of suite.tests) {
-        this.wrapTest(t);
+        wrapTest(t, this.current);
         const file = t.file ? path.resolve(this.pkgRoot, t.file) : '';
         const name = t.titlePath().join(' > ');
         const key = `${norm(file)}\0${name}`;
@@ -415,114 +260,8 @@ export class Executor {
     return out;
   }
 
-  // --- the user's functions, wrapped once ------------------------------------------------------
-  //
-  // Mocha treats a failed beforeEach/afterEach hook as a failure of the hook and skips the rest of
-  // its suite, which here would be every later try of every test in it. tzap keeps it to the try,
-  // as Vitest and Jest do for a failing hook: the error is the try's, the remaining beforeEach
-  // hooks and the body are not run, the afterEach hooks are, and the next try runs as usual.
-  // A try whose mutant is already killed in this run (X) runs none of the user's hooks or body.
-
-  private wrapHook(h: MochaHook, kind: 'before' | 'after'): void {
-    const orig = h.fn as AnyFn | undefined;
-    if (h === this.tzapAfterEach || typeof orig !== 'function' || (orig as unknown as Record<symbol, boolean>)[WRAPPED]) return;
-    const self = this;
-    const skip = () => {
-      const c = self.state?.current;
-      return c !== undefined && !c.done && (c.skipped || (kind === 'before' && c.hookFailed));
-    };
-    const fail = (e: unknown): boolean => {
-      const c = self.state?.current;
-      if (!c || c.done || isPendingSignal(e)) return false;
-      if (c.error === undefined) c.error = e ?? new Error('hook failed');
-      c.hookFailed = true;
-      return true;
-    };
-    h.fn =
-      orig.length > 0
-        ? standIn(orig, function (this: unknown, done: unknown, ...rest: unknown[]) {
-            const cb = done as (e?: unknown) => void;
-            if (skip()) return cb();
-            try {
-              return orig.call(this, (e?: unknown) => (e && fail(e) ? cb() : cb(e)), ...rest);
-            } catch (e) {
-              if (fail(e)) return cb();
-              throw e;
-            }
-          })
-        : standIn(orig, function (this: unknown) {
-            if (skip()) return undefined;
-            let r: unknown;
-            try {
-              r = orig.call(this);
-            } catch (e) {
-              if (fail(e)) return undefined;
-              throw e;
-            }
-            if (r && typeof (r as Promise<unknown>).then === 'function') {
-              return (r as Promise<unknown>).then(
-                () => undefined,
-                (e: unknown) => {
-                  if (!fail(e)) throw e;
-                },
-              );
-            }
-            return r;
-          });
-  }
-
-  /**
-   * The test body: records a failure as the try's, and fails a try that is not the test's last
-   * with the NEXT marker, so that Mocha's retry loop runs the next one. The last try reports its
-   * real result. Not run at all behind a failed beforeEach (the hook's error is the try's) or for
-   * an already-killed mutant.
-   */
-  private wrapTest(t: MochaTest): void {
-    const orig = t.fn as AnyFn | undefined;
-    if (typeof orig !== 'function' || (orig as unknown as Record<symbol, boolean>)[WRAPPED]) return;
-    const self = this;
-    t.fn = standIn(orig, function (this: unknown, ...args: unknown[]) {
-      const c = self.state?.current;
-      if (!c || c.done) return orig.apply(this, args);
-      const last = c.index >= c.total - 1;
-      /** What the body reports to Mocha: the marker while tries remain, else its own result. */
-      const settle = (failed: boolean, e?: unknown): unknown => {
-        if (failed && !c.done && c.error === undefined) c.error = e ?? new Error('failed with no reason');
-        return last ? (failed ? (e ?? new Error('failed with no reason')) : undefined) : NEXT;
-      };
-      const callback = orig.length > 0;
-      const cb = args[0] as (e?: unknown) => void;
-      if (c.skipped || c.hookFailed) {
-        const out = settle(c.hookFailed, c.error);
-        if (callback) return cb(out);
-        if (out !== undefined) throw out;
-        return undefined;
-      }
-      let r: unknown;
-      try {
-        r = callback ? orig.call(this, (e?: unknown) => cb(e ? settle(true, e) : settle(false)), ...args.slice(1)) : orig.apply(this, args);
-      } catch (e) {
-        if (isPendingSignal(e)) throw e;
-        throw settle(true, e);
-      }
-      if (callback) return r;
-      if (r && typeof (r as Promise<unknown>).then === 'function') {
-        return (r as Promise<unknown>).then(
-          () => {
-            const out = settle(false);
-            if (out !== undefined) throw out;
-          },
-          (e: unknown) => {
-            if (isPendingSignal(e)) throw e;
-            throw settle(true, e);
-          },
-        );
-      }
-      const out = settle(false);
-      if (out !== undefined) throw out;
-      return r;
-    });
-  }
+  /** The try in progress, for the wrappers around the user's functions. */
+  private readonly current = () => this.state?.current;
 
   // --- per try ----------------------------------------------------------------------------------
 
@@ -690,7 +429,6 @@ export class Executor {
 
     const staticMutant = req.staticMutant ?? -1;
     endTry(this.rt);
-    // Static: active before anything this run loads evaluates (in an isolated host, everything).
     // Static: active, with its loop limit, before anything this run loads evaluates (in an
     // isolated host, everything).
     if (req.mode === 'static') activateStatic(this.rt, staticMutant, req.staticLimit);
@@ -743,8 +481,8 @@ export class Executor {
     const walk = (suite: MochaSuite) => {
       // A kill must not stop the run, and neither may a red test in coverage.
       suite._bail = false;
-      for (const h of suite._beforeEach) this.wrapHook(h, 'before');
-      for (const h of suite._afterEach) this.wrapHook(h, 'after');
+      for (const h of suite._beforeEach) wrapHook(h, 'before', this.current);
+      for (const h of suite._afterEach) if (h !== this.tzapAfterEach) wrapHook(h, 'after', this.current);
       const tests = suite.tests;
       this.originals.set(suite, tests);
       const run: MochaTest[] = [];
