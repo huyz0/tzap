@@ -171,12 +171,26 @@ describe('sample-node', () => {
 
   it('treats the budget as a silence window: a long run that keeps finishing tries is not killed', async () => {
     const small = 'test/discount.test.ts::discountedPrice > applies a small discount';
-    const t0 = performance.now();
-    const r = await s.run({ id: 200, mode: 'mutate', plan: { [small]: Array.from({ length: 6000 }, () => control) }, budgetMs: 250 });
-    expect(performance.now() - t0).toBeGreaterThan(250);
+    // A window a busy machine never stalls through (a garbage collection or a descheduled process
+    // lasts milliseconds), and a run about three windows long. The run's length comes from the
+    // cost of a try measured here: the difference between two runs cancels a run's fixed cost.
+    const window = 1000;
+    const timed = async (id: number, tries: number, budgetMs?: number) => {
+      const t0 = performance.now();
+      const r = await s.run({ id, mode: 'mutate', plan: { [small]: Array.from({ length: tries }, () => control) }, ...(budgetMs ? { budgetMs } : {}) });
+      return { r, ms: performance.now() - t0 };
+    };
+    await timed(199, 5000); // warm: the first runs of a fresh host are several times slower
+    const a = await timed(200, 1000);
+    const b = await timed(201, 6000);
+    const perTry = Math.max(0.001, (b.ms - a.ms) / 5000);
+    const tries = Math.ceil((3 * window) / perTry);
+    const { r, ms } = await timed(202, tries, window);
+    // Longer than the window, or the test would not show that the budget is not a total.
+    expect(ms).toBeGreaterThan(window);
     expect(r.timedOut).toBeUndefined();
-    expect(r.tests[0]!.tries).toHaveLength(6000);
-  });
+    expect(r.tests[0]!.tries).toHaveLength(tries);
+  }, 120_000);
 
   it('runs a static mutant in a fresh process, active before modules evaluate', async () => {
     const sep = find(p, 'src/strings.ts', 1, '""');
