@@ -36,7 +36,7 @@ export const NEXT = Object.assign(new Error('tzap: next try'), { stack: 'tzap: n
 const WRAPPED = Symbol.for('tzap.mocha.wrapped');
 
 /** Mocha's `this.skip()` signal: PendingError in Mocha 12, a plain Pending object before. */
-export const isPendingSignal = (e: unknown) => {
+const isPendingSignal = (e: unknown) => {
   const name = (e as { constructor?: { name?: string } } | null)?.constructor?.name;
   return name === 'PendingError' || name === 'Pending';
 };

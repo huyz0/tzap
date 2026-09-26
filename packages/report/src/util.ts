@@ -73,7 +73,7 @@ export function ordered<T extends object>(o: T, first: readonly string[]): T {
   return out as T;
 }
 
-export function byString<T>(key: (t: T) => string): (a: T, b: T) => number {
+function byString<T>(key: (t: T) => string): (a: T, b: T) => number {
   return (a, b) => {
     const x = key(a);
     const y = key(b);

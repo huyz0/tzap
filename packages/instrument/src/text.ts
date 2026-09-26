@@ -85,7 +85,6 @@ export function skipTrivia(source: string, from: number): number {
   }
 }
 
-
 /** Source text as mutants report it: at most 200 characters, a longer one cut to 197 and `...`. */
 export function truncate(s: string): string {
   return s.length > 200 ? `${s.slice(0, 197)}...` : s;

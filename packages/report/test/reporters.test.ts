@@ -250,6 +250,12 @@ describe('markdown', () => {
     expect(md).toContain('...and 7 more.');
   });
 
+  it('fences a file name that holds a backtick so the code span does not end early', () => {
+    const r = manySurvivors(1);
+    r.mutants[0]!.file = 'src/a`b.ts';
+    expect(markdownReport(r)).toContain('**`` src/a`b.ts ``**');
+  });
+
   it('omits the details block when nothing survived', () => {
     expect(markdownReport({ ...fixture(), mutants: [] })).not.toContain('<details>');
   });

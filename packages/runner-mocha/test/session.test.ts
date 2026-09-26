@@ -230,6 +230,8 @@ describe('hazards', () => {
 
   it('identifies duplicates by ordinal, skips pending tests, loads CommonJS', () => {
     expect(coverage.tests.map((t) => [t.id, t.state])).toEqual([
+      ['test/callbacks.test.ts::callbacks > reads what the hook computed', 'pass'],
+      ['test/callbacks.test.ts::strays > rejects a promise nobody awaits', 'pass'],
       ['test/loops.test.ts::spins to a limit', 'pass'],
       ['test/loops.test.ts::sums > uses the hook', 'pass'],
       ['test/loops.test.ts::sums > dup', 'pass'],
@@ -311,6 +313,33 @@ describe('hazards', () => {
       [-1, 'S'],
       [-1, 'S'],
     ]);
+  });
+
+  it('keeps a callback hook\'s failure to its try, and runs callback bodies', async () => {
+    const reads = 'test/callbacks.test.ts::callbacks > reads what the hook computed';
+    const flip = find(p, 'src/loops.ts', 3, 's -= i');
+    const res = await s.run({ id: 5, mode: 'mutate', plan: { [reads]: [control, tryOf(flip), control, control] } });
+    const tries = byId(res, reads).tries!;
+    expect(tries.map(([m, o]) => [m, o])).toEqual([
+      [-1, 'S'],
+      [flip.num, 'K'],
+      [-1, 'S'],
+      [-1, 'S'],
+    ]);
+    expect(tries[1]![2]).toBe('the hook computed -6');
+  });
+
+  it('fails the running try with a rejection user code leaves unhandled', async () => {
+    const stray = 'test/callbacks.test.ts::strays > rejects a promise nobody awaits';
+    const flip = find(p, 'src/loops.ts', 3, 's -= i');
+    const res = await s.run({ id: 6, mode: 'mutate', plan: { [stray]: [control, tryOf(flip), control] } });
+    const tries = byId(res, stray).tries!;
+    expect(tries.map(([m, o]) => [m, o])).toEqual([
+      [-1, 'S'],
+      [flip.num, 'K'],
+      [-1, 'S'],
+    ]);
+    expect(tries[1]![2]).toMatch(/a stray rejection/);
   });
 
   it('keeps hooks per try: a test that depends on beforeEach passes every control', async () => {

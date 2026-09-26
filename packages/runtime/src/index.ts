@@ -32,13 +32,6 @@ export interface TzapRuntime {
 
 export const RUNTIME_GLOBAL = '__tzap';
 
-export class TzapHangError extends Error {
-  constructor(reason: string) {
-    super(`tzap: mutant declared hung (${reason})`);
-    this.name = 'TzapHangError';
-  }
-}
-
 /**
  * Source of the factory. Instrumented files inline a call to it so that code loaded outside any
  * tzap-controlled worker (a child process a test spawns, say) still runs, unmutated.

@@ -18,11 +18,13 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "c8": "12.0.0",
+    "@vitest/coverage-v8": "5.0.2",
+    "ast-v8-to-istanbul": "1.0.7",
     "esbuild": "0.28.2",
     "istanbul-lib-coverage": "3.2.2",
     "istanbul-lib-report": "3.0.1",
     "istanbul-reports": "3.2.0",
+    "oxc-parser": "0.151.0",
     "typescript": "7.0.2",
     "vitest": "5.0.2"
   }

@@ -2,6 +2,7 @@
  * The command line as a user meets it: exit codes, what goes to stdout, and that the commands
  * agree with each other. The analysis itself is covered by e2e.test.ts.
  */
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -141,4 +142,18 @@ describe('the command line', () => {
     expect(code).toBe(0);
     expect(out).toMatch(/Threshold 90(\.0)?%: passed/);
   }, 60_000);
+});
+
+describe('the tzap executable', () => {
+  const bin = path.join(repo, 'packages/tzap/dist/bin.js');
+  const exec = (args: string[]) => spawnSync(process.execPath, [bin, ...args], { cwd: sample, encoding: 'utf8' });
+
+  it('exits with the command status and prints to the real streams', () => {
+    const version = exec(['--version']);
+    expect(version.status).toBe(0);
+    expect(version.stdout.trim()).toBe(VERSION);
+    const usage = exec(['nonsense']);
+    expect(usage.status).toBe(2);
+    expect(usage.stderr).toContain('unknown command "nonsense"');
+  });
 });
