@@ -6,7 +6,7 @@ branding:
 
 inputs:
   base:
-    description: The ref to diff against. Default the pull request's base branch.
+    description: The ref to diff against. Default the pull request's base branch; required on other events.
     required: false
     default: ''
   threshold:
@@ -18,7 +18,7 @@ inputs:
     required: false
     default: '.'
   version:
-    description: The tzap version to run; default the one in the project's devDependencies, else latest.
+    description: A tzap package spec for npx to run (a version, a tarball path or URL); default the tzap installed in the project.
     required: false
     default: ''
   args:
@@ -38,18 +38,32 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        TZAP_BASE: ${{ inputs.base || format('origin/{0}', github.base_ref) }}
+        TZAP_BASE: ${{ inputs.base || (github.base_ref && format('origin/{0}', github.base_ref)) || '' }}
         TZAP_THRESHOLD: ${{ inputs.threshold }}
         TZAP_VERSION: ${{ inputs.version }}
         TZAP_ARGS: ${{ inputs.args }}
       run: |
         set -o pipefail
+        if [ -z "$TZAP_BASE" ]; then
+          echo "::error::No base to diff against: this is not a pull request, so set the action's base input."
+          exit 2
+        fi
         if ! git rev-parse --verify --quiet "$TZAP_BASE^{commit}" > /dev/null; then
           echo "::error::$TZAP_BASE is not in this clone. Check out with fetch-depth: 0."
           exit 2
         fi
-        spec=tzap
-        if [ -n "$TZAP_VERSION" ]; then spec="tzap@$TZAP_VERSION"; fi
+        # The project's own tzap, never whatever npm resolves the bare name to.
+        if [ -n "$TZAP_VERSION" ]; then
+          case "$TZAP_VERSION" in
+            *[/:]*|*.tgz) spec="$TZAP_VERSION" ;;
+            *) spec="tzap@$TZAP_VERSION" ;;
+          esac
+        elif [ -x node_modules/.bin/tzap ]; then
+          spec=tzap
+        else
+          echo "::error::tzap is not installed in $(pwd): add it to devDependencies, or set the action's version input."
+          exit 2
+        fi
         threshold=()
         if [ -n "$TZAP_THRESHOLD" ]; then threshold=(--threshold "$TZAP_THRESHOLD"); fi
         code=0

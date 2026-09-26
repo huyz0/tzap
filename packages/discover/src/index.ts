@@ -12,6 +12,11 @@ import { MODEL_SCHEMA_VERSION, type PackageModel, type ProjectModel, type Runner
 import { glob } from 'tinyglobby';
 import { parse as parseYaml } from 'yaml';
 
+/** Discovery cannot describe the project as asked: no package, or a filter that matches none. */
+export class DiscoveryError extends Error {
+  override name = 'DiscoveryError';
+}
+
 export interface DiscoverOptions {
   /** Directory discovery starts from; the workspace root is found by walking up from here. */
   cwd: string;
@@ -143,7 +148,7 @@ function findRoot(cwd: string, notes: string[]): { root: Root; nearest: string |
     dir = parent;
   }
   if (nearest === undefined) {
-    throw new Error(`no package.json found in ${slash(path.resolve(cwd))} or any parent directory`);
+    throw new DiscoveryError(`no package.json found in ${slash(path.resolve(cwd))} or any parent directory`);
   }
   return { root: { dir: nearest, kind: 'single', patterns: [], pkg: readJson(path.join(nearest, 'package.json')) ?? {} }, nearest };
 }
@@ -371,7 +376,7 @@ function applyFilter(packages: PackageModel[], filter: string[], rootDir: string
   }
   const kept = packages.filter((p) => wanted.has(p.id) || wanted.has(p.root));
   if (kept.length === 0) {
-    throw new Error(`filter ${JSON.stringify(filter)} matched no package; found: ${packages.map((p) => `${p.id} (${p.root})`).join(', ')}`);
+    throw new DiscoveryError(`filter ${JSON.stringify(filter)} matched no package; found: ${packages.map((p) => `${p.id} (${p.root})`).join(', ')}`);
   }
   notes.push(`filter kept ${kept.length} of ${packages.length} packages: ${kept.map((p) => p.id).join(', ')}`);
   return kept;

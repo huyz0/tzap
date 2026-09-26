@@ -7,12 +7,22 @@ export interface ReportContext {
   color: boolean;
   /** Minimum passing mutation score, as a percentage. Reporters only display it. */
   threshold?: number;
+  /**
+   * The analysis root's path within its repository ("packages/app/"), for formats whose paths
+   * must be repository-relative (GitHub annotations, SARIF). Default: the root is the repository's.
+   */
+  repositoryPrefix?: string;
 }
 
-/** Mutants in report order, independent of the order the engine happened to produce them in. */
+/** A root-relative path as its repository sees it. */
+export function inRepository(file: string, ctx: Pick<ReportContext, 'repositoryPrefix'> = {}): string {
+  return `${ctx.repositoryPrefix ?? ''}${file}`;
+}
+
 /** Score colours, as the mutation-testing-elements viewer draws them: good from 80%, poor below 60%. */
 export const SCORE_THRESHOLDS = { high: 80, low: 60 } as const;
 
+/** Mutants in report order, independent of the order the engine happened to produce them in. */
 export function sorted(mutants: readonly MutantResult[], status?: MutantStatus): MutantResult[] {
   return mutants.filter((m) => status === undefined || m.status === status).sort(compareMutants);
 }

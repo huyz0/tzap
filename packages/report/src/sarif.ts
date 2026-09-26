@@ -1,5 +1,5 @@
 import type { AnalysisResult } from '@tzap/model';
-import { describe, sorted } from './util.js';
+import { describe, inRepository, sorted, type ReportContext } from './util.js';
 
 const SARIF_SCHEMA = 'https://json.schemastore.org/sarif-2.1.0.json';
 
@@ -13,7 +13,7 @@ function uri(path: string): string {
  * surviving mutant. The stable mutant id is the fingerprint, so code scanning tracks a survivor
  * across commits rather than re-opening it whenever lines above it move.
  */
-export function sarifReport(result: AnalysisResult) {
+export function sarifReport(result: AnalysisResult, ctx: Pick<ReportContext, 'repositoryPrefix'> = {}) {
   const mutators = [...new Set(result.mutants.map((m) => m.mutatorName))].sort();
   const index = new Map(mutators.map((name, i) => [name, i]));
   return {
@@ -44,7 +44,7 @@ export function sarifReport(result: AnalysisResult) {
           locations: [
             {
               physicalLocation: {
-                artifactLocation: { uri: uri(m.file), uriBaseId: '%SRCROOT%' },
+                artifactLocation: { uri: uri(inRepository(m.file, ctx)), uriBaseId: '%SRCROOT%' },
                 region: {
                   startLine: m.location.start.line,
                   startColumn: m.location.start.column,
@@ -61,6 +61,6 @@ export function sarifReport(result: AnalysisResult) {
   };
 }
 
-export function sarifJson(result: AnalysisResult): string {
-  return `${JSON.stringify(sarifReport(result), null, 2)}\n`;
+export function sarifJson(result: AnalysisResult, ctx: Pick<ReportContext, 'repositoryPrefix'> = {}): string {
+  return `${JSON.stringify(sarifReport(result, ctx), null, 2)}\n`;
 }

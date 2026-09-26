@@ -169,16 +169,18 @@ wall clock on shared CI is advisory.
 - Every scenario tzap loses is published as prominently as those it wins.
 - Both tools' configuration is checked in so anyone can rerun it.
 
-## 6. Deliverables
+## 6. Where it lives
 
     tools/parity/
       corpus.lock                pinned corpus, exact commits and runner versions
+      fetch.mjs                  clones the corpus at those commits
       mutator-mapping.yaml       tzap <-> Stryker mutator equivalence
       parity-baseline.yaml       accepted B/C/D disagreements with justification
-      run.ts                     run both tools over a tier
-      normalise.ts               elements JSON (both tools) -> normalised records
-      compare.ts                 inventory diff, agreement matrix, triage report
+      run.mjs                    runs both tools over the corpus
+      normalise.mjs              elements JSON (both tools) -> normalised records
+      compare.mjs                inventory diff, agreement matrix, triage report
     tools/bench/
-      scenarios.yaml             S1–S9
-      budgets.yaml               CI budgets on machine-independent metrics
-      report.ts                  markdown + chart output
+      generate.mjs               the generated benchmark package
+      bench.mjs                  the S1–S9 scenarios, both tools
+      s3-corpus.mjs              S3 on remeda
+      render.mjs                 report.md from the results

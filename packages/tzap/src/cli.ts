@@ -5,7 +5,7 @@
  *                      [-r console,html,...] [-o DIR] [--threshold PCT] [--fail-on-survivors]
  *                      [--engine warm|reference] [--mutators A,B] [--workers N] [--cache-dir DIR] [--dry-run]
  *   tzap model         [-o model.json] [--filter PKG]
- *   tzap list-mutants  [-m model.json] [--format json|table]
+ *   tzap list-mutants  [-m model.json] [--filter PKG] [--from REF --to REF | --patch FILE] [--format json|table]
  *   tzap mutators
  *
  * Exit codes: 0 met the bar, 1 did not (threshold or survivors), 2 usage error, 3 analysis failed.
@@ -14,8 +14,8 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { analyse, loadCache, relativeTo, saveCache, sourceFiles, type EngineEvent } from '@tzap/core';
-import { discover } from '@tzap/discover';
-import { gitChangedLines, parseUnifiedDiff, type ChangedLines, type LineRange } from '@tzap/git';
+import { discover, DiscoveryError } from '@tzap/discover';
+import { gitChangedLines, parseUnifiedDiff, repositoryPrefix, type ChangedLines, type LineRange } from '@tzap/git';
 import { ALL_MUTATORS, EXTRA_MUTATORS, aridFilters, instrument, type MutantFilter } from '@tzap/instrument';
 import { meetsThreshold, ModelValidationError, parseModel, score, serialiseModel, type Granularity, type ProjectModel, type ScopeSpec } from '@tzap/model';
 import { reporters as reporterRegistry, writeReports } from '@tzap/report';
@@ -51,7 +51,6 @@ const RUN_OPTIONS = {
   'one-per-line': { type: 'boolean' },
   dedup: { type: 'boolean' },
   extreme: { type: 'boolean' },
-  'no-verify-survivors': { type: 'boolean' },
   'verify-survivors': { type: 'string' },
   'keep-pool': { type: 'boolean' },
   typecheck: { type: 'string' },
@@ -64,16 +63,26 @@ const RUN_OPTIONS = {
   version: { type: 'boolean', short: 'v' },
 } as const;
 
+/** The options each command takes; any other is a usage error rather than silently ignored. */
+const INVENTORY_OPTIONS = ['model', 'filter', 'from', 'to', 'patch', 'scope', 'mutators', 'no-arid', 'one-per-line', 'dedup', 'extreme', 'typecheck', 'tsconfig'];
+const COMMAND_OPTIONS: Record<string, readonly string[]> = {
+  run: Object.keys(RUN_OPTIONS).filter((o) => o !== 'format'),
+  'list-mutants': [...INVENTORY_OPTIONS, 'format'],
+  model: ['filter', 'out-dir'],
+  mutators: [],
+};
+
 const HELP = `tzap ${VERSION} — fast, diff-aware mutation testing for TypeScript and JavaScript
 
 Usage:
   tzap run [options]            analyse, and report surviving mutants
   tzap model [-o model.json]    print the discovered project model
-  tzap list-mutants [options]   the inventory, without running a test
+  tzap list-mutants [options]   the inventory, without running a test (--format json|table)
   tzap mutators                 the available mutators
 
 Run options:
   -m, --model FILE              project model (default: discovered from the current directory)
+      --filter LIST             analyse only these workspace packages (names or directories)
       --from REF --to REF       analyse only lines changed between two refs; -Local- is the
                                 working tree, -Empty- the empty tree (default HEAD..-Local-)
       --patch FILE              analyse only lines a unified diff changes (no git needed)
@@ -85,6 +94,7 @@ Run options:
       --engine warm|reference   reference runs one fresh process per mutant: slow, and the oracle
       --mutators LIST           restrict to these mutators
       --workers N               worker count for the test runner's pool
+      --concurrency N           sessions deciding isolated mutants at once (default: from the cores)
       --cache-dir DIR           reuse verdicts that are provably still valid
       --no-arid                 also mutate logging and similar code (arid rules are on by default)
       --one-per-line            keep one mutant per line (faster; stops reporting some gaps)
@@ -137,20 +147,29 @@ interface Inventory {
   typecheck?: 'survivors' | 'all';
 }
 
-async function inventorySettings(model: ProjectModel, values: Record<string, unknown>, cwd: string, quiet: boolean): Promise<Inventory> {
-  const mutators = values.extreme ? ['FunctionBody'] : list(values.mutators as string | undefined);
+/** Rejects bad inventory option values before anything is discovered or run. */
+function checkInventoryOptions(values: Record<string, unknown>): void {
+  const mutators = list(values.mutators as string | undefined);
   if (mutators) {
     const known = new Set([...ALL_MUTATORS, ...EXTRA_MUTATORS].map((m) => m.name));
     const unknown = mutators.filter((m) => !known.has(m));
     if (unknown.length) throw new UsageError(`--mutators: unknown ${unknown.join(', ')}; known: ${[...known].join(', ')}`);
   }
+  const requested = values.typecheck as string | undefined;
+  if (requested !== undefined && !['off', 'survivors', 'all'].includes(requested)) throw new UsageError(`--typecheck: expected off, survivors or all, got "${requested}"`);
+  const scope = values.scope as string | undefined;
+  if (scope !== undefined && !GRANULARITIES.includes(scope as Granularity)) throw new UsageError(`--scope: expected line, function or file, got "${scope}"`);
+}
+
+async function inventorySettings(model: ProjectModel, values: Record<string, unknown>, cwd: string, quiet: boolean): Promise<Inventory> {
+  checkInventoryOptions(values);
+  const mutators = values.extreme ? ['FunctionBody'] : list(values.mutators as string | undefined);
   const filters = values['no-arid'] ? [] : aridFilters();
   const reduce = { onePerLine: values['one-per-line'] === true, equivalence: values.dedup === true };
 
   // Type checking: explicit modes must work; the default quietly steps aside for a project with
   // no TypeScript or no tsconfig.
   const requested = values.typecheck as string | undefined;
-  if (requested !== undefined && !['off', 'survivors', 'all'].includes(requested)) throw new UsageError(`--typecheck: expected off, survivors or all, got "${requested}"`);
   if (requested === 'off') return { mutators, filters, reduce };
   let checker: TypeChecker | undefined;
   try {
@@ -173,7 +192,7 @@ async function inventorySettings(model: ProjectModel, values: Record<string, unk
 
 async function loadModel(file: string | undefined, cwd: string, filter?: string[]): Promise<{ model: ProjectModel; notes: string[] }> {
   if (file) {
-    const text = readFileSync(path.resolve(cwd, file), 'utf8');
+    const text = readInput(path.resolve(cwd, file), '--model');
     const { model, warnings } = parseModel(text);
     if (!path.isAbsolute(model.root)) model.root = path.resolve(path.dirname(path.resolve(cwd, file)), model.root);
     return { model, notes: warnings };
@@ -192,33 +211,47 @@ async function loadModel(file: string | undefined, cwd: string, filter?: string[
   return { model: d.model, notes: d.notes };
 }
 
+/** A file the user named: one that cannot be read is a usage error, not a failed analysis. */
+function readInput(file: string, what: string): string {
+  try {
+    return readFileSync(file, 'utf8');
+  } catch (e) {
+    throw new UsageError(`${what}: cannot read ${file}: ${(e as NodeJS.ErrnoException).code ?? (e as Error).message}`);
+  }
+}
+
 async function resolveScope(model: ProjectModel, values: Record<string, unknown>, cwd: string): Promise<ChangedLines | undefined> {
   const from = values.from as string | undefined;
   const to = values.to as string | undefined;
   const patch = values.patch as string | undefined;
   const scope: ScopeSpec | undefined = patch || from || to ? { kind: 'diff', from, to, patch } : model.scope;
   const granularity = (values.scope as string | undefined) ?? (scope?.kind === 'diff' ? scope.granularity : undefined) ?? 'line';
-  if (!GRANULARITIES.includes(granularity as Granularity)) throw new UsageError(`--scope: expected line, function or file, got "${granularity}"`);
   if (!scope || scope.kind === 'full') {
     if (values.scope !== undefined) throw new UsageError('--scope widens a diff scope: give --from/--to or --patch too');
     return undefined;
   }
-  const changed = await changedLines(model, scope, cwd);
+  // A patch named on the command line is relative to the current directory; one in the model file,
+  // like every path there, to the model root.
+  const base = patch ? cwd : model.root;
+  const changed = await changedLines(model, scope, base);
   if (granularity === 'line') return changed;
   return { ...changed, files: widenScope(model.root, changed.files, granularity as Granularity), description: `${changed.description}, widened to whole ${granularity === 'file' ? 'files' : 'functions'}` };
 }
 
 const GRANULARITIES: readonly Granularity[] = ['line', 'function', 'file'];
 
-async function changedLines(model: ProjectModel, scope: Extract<ScopeSpec, { kind: 'diff' }>, cwd: string): Promise<ChangedLines> {
+async function changedLines(model: ProjectModel, scope: Extract<ScopeSpec, { kind: 'diff' }>, base: string): Promise<ChangedLines> {
   if (scope.patch) {
-    // Paths in a patch are relative to wherever it was made: usually the repository root, as
-    // git writes them, sometimes the current directory. Take whichever names a real file.
-    const parsed = parseUnifiedDiff(readFileSync(path.resolve(cwd, scope.patch), 'utf8'));
+    // Paths in a patch are relative to wherever it was made: usually the repository root, as git
+    // writes them, sometimes the model root or the current directory. Take the first of those —
+    // the model root, the directory the patch was named from, then each directory above the model
+    // root — under which the path names a real file.
+    const parsed = parseUnifiedDiff(readInput(path.resolve(base, scope.patch), '--patch'));
+    const bases = [model.root, base];
+    for (let d = path.dirname(model.root); d !== bases[bases.length - 1]; d = path.dirname(d)) bases.push(d);
     const files = new Map<string, LineRange[]>();
     for (const [p, ranges] of parsed.files) {
-      const fromRoot = path.resolve(model.root, p);
-      const abs = existsSync(fromRoot) ? fromRoot : path.resolve(cwd, p);
+      const abs = bases.map((b) => path.resolve(b, p)).find((f) => existsSync(f)) ?? path.resolve(model.root, p);
       files.set(relativeTo(model.root, abs), ranges as LineRange[]);
     }
     return { ...parsed, files };
@@ -260,6 +293,19 @@ function progress(quiet: boolean) {
 
 async function run(values: Record<string, unknown>, cwd: string): Promise<number> {
   const quiet = values.quiet === true;
+  // Every flag is checked before anything is read or run.
+  const engine = (values.engine as string | undefined) ?? 'warm';
+  if (engine !== 'warm' && engine !== 'reference') throw new UsageError(`--engine: expected warm or reference, got "${engine}"`);
+  const reporterFlag = list(values.reporters as string | undefined);
+  const unknownReporters = (reporterFlag ?? []).filter((r) => !reporterNames.includes(r));
+  if (unknownReporters.length) throw new UsageError(`--reporters: unknown ${unknownReporters.join(', ')}; known: ${reporterNames.join(', ')}`);
+  const outDir = path.resolve(cwd, (values['out-dir'] as string | undefined) ?? 'reports/tzap');
+  const threshold = percent(values.threshold as string | undefined, 'threshold');
+  const workers = count(values.workers as string | undefined, 'workers');
+  const concurrency = count(values.concurrency as string | undefined, 'concurrency');
+  const verifyMode = (values['verify-survivors'] as string | undefined) ?? 'auto';
+  if (!['auto', 'all', 'off'].includes(verifyMode)) throw new UsageError(`--verify-survivors: expected auto, all or off, got "${verifyMode}"`);
+  checkInventoryOptions(values);
   const { model, notes } = await loadModel(values.model as string | undefined, cwd, list(values.filter as string | undefined));
   if (!quiet) for (const n of notes) process.stderr.write(`tzap: ${n}\n`);
   const changed = await resolveScope(model, values, cwd);
@@ -267,15 +313,10 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
     process.stderr.write(`tzap: scope: ${changed.description}\n`);
     process.stderr.write('tzap: the range only selects what to analyse; the analysis runs against the working tree\n');
   }
-  const engine = (values.engine as string | undefined) ?? 'warm';
-  if (engine !== 'warm' && engine !== 'reference') throw new UsageError(`--engine: expected warm or reference, got "${engine}"`);
-  const reporters = list(values.reporters as string | undefined) ?? model.reporters ?? ['console'];
-  const unknownReporters = reporters.filter((r) => !reporterNames.includes(r));
-  if (unknownReporters.length) throw new UsageError(`--reporters: unknown ${unknownReporters.join(', ')}; known: ${reporterNames.join(', ')}`);
-  const outDir = path.resolve(cwd, (values['out-dir'] as string | undefined) ?? 'reports/tzap');
-  const threshold = percent(values.threshold as string | undefined, 'threshold');
-  const workers = count(values.workers as string | undefined, 'workers');
-  const concurrency = count(values.concurrency as string | undefined, 'concurrency');
+
+  const reporters = reporterFlag ?? model.reporters ?? ['console'];
+  const unknownInModel = reporters.filter((r) => !reporterNames.includes(r));
+  if (unknownInModel.length) throw new UsageError(`model reporters: unknown ${unknownInModel.join(', ')}; known: ${reporterNames.join(', ')}`);
 
   if (values['dry-run']) {
     const lines = [`root: ${model.root}`];
@@ -289,13 +330,13 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
     return 0;
   }
 
-  const cacheDir = (values['cache-dir'] as string | undefined) ?? model.cache?.dir;
-  const verifyMode = values['no-verify-survivors'] ? 'off' : ((values['verify-survivors'] as string | undefined) ?? 'auto');
-  if (!['auto', 'all', 'off'].includes(verifyMode)) throw new UsageError(`--verify-survivors: expected auto, all or off, got "${verifyMode}"`);
+  // A cache directory on the command line is relative to the current directory; the model's, to the model root.
+  const cacheFlag = values['cache-dir'] as string | undefined;
+  const cacheDir = cacheFlag !== undefined ? path.resolve(cwd, cacheFlag) : model.cache?.dir !== undefined ? path.resolve(model.root, model.cache.dir) : undefined;
   const inv = await inventorySettings(model, values, cwd, quiet);
   const { mutators, filters, checker, typecheck: tcMode } = inv;
   const cache = cacheDir
-    ? loadCache(path.resolve(cwd, cacheDir), model, { tzapVersion: VERSION, mutators, filters: filters.map((f) => f.name), typecheck: checker && tcMode ? tcMode : 'off', verifySurvivors: verifyMode })
+    ? loadCache(cacheDir, model, { tzapVersion: VERSION, mutators, filters: filters.map((f) => f.name), typecheck: checker && tcMode ? tcMode : 'off', verifySurvivors: verifyMode })
     : undefined;
   if (cache?.note && !quiet) process.stderr.write(`tzap: ${cache.note}\n`);
 
@@ -320,7 +361,9 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
   await checker?.close();
   if (cache) saveCache(cache, result);
 
-  const stdout = writeReports(result, reporters, { outDir, color: process.stdout.isTTY === true, threshold });
+  // GitHub places annotations, and code scanning results, by repository-relative path.
+  const prefix = reporters.some((r) => r === 'github' || r === 'sarif') ? await repositoryPrefix(model.root) : undefined;
+  const stdout = writeReports(result, reporters, { outDir, color: process.stdout.isTTY === true, threshold, ...(prefix ? { repositoryPrefix: prefix } : {}) });
   if (stdout) process.stdout.write(stdout.endsWith('\n') ? stdout : `${stdout}\n`);
 
   const s = score(result.mutants);
@@ -331,7 +374,10 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
 }
 
 async function listMutants(values: Record<string, unknown>, cwd: string): Promise<number> {
-  const { model } = await loadModel(values.model as string | undefined, cwd);
+  const format = (values.format as string | undefined) ?? 'json';
+  if (format !== 'json' && format !== 'table') throw new UsageError(`--format: expected json or table, got "${format}"`);
+  checkInventoryOptions(values);
+  const { model } = await loadModel(values.model as string | undefined, cwd, list(values.filter as string | undefined));
   const changed = await resolveScope(model, values, cwd);
   // The inventory `run` would analyse: the same mutators, filters and reductions.
   const inv = await inventorySettings(model, values, cwd, true);
@@ -346,7 +392,7 @@ async function listMutants(values: Record<string, unknown>, cwd: string): Promis
       all.push(...out.mutants.map(({ num: _n, site: _s, ...m }) => m));
     }
   }
-  if (values.format === 'table') {
+  if (format === 'table') {
     for (const m of all) process.stdout.write(`${m.file}:${m.location.start.line}:${m.location.start.column}\t${m.mutatorName}\t${m.replacement}${m.ignoredBy ? `\t(ignored: ${m.ignoredBy})` : ''}\n`);
   } else {
     process.stdout.write(`${JSON.stringify(all, null, 2)}\n`);
@@ -374,14 +420,25 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
       process.stdout.write(`${VERSION}\n`);
       return 0;
     }
+    const allowed = COMMAND_OPTIONS[command];
+    if (!allowed) throw new UsageError(`unknown command "${command}"; expected run, model, list-mutants or mutators`);
+    const stray = Object.keys(values).filter((o) => !allowed.includes(o) && o !== 'help' && o !== 'version' && o !== 'quiet');
+    if (stray.length) throw new UsageError(`${command} does not take ${stray.map((o) => `--${o}`).join(', ')}`);
     switch (command) {
       case 'run':
         return await run(values, cwd);
       case 'model': {
         const { model, notes } = await loadModel(undefined, cwd, list(values.filter));
         for (const n of notes) process.stderr.write(`tzap: ${n}\n`);
-        const text = serialiseModel(model);
-        if (values['out-dir']) writeFileSync(path.resolve(cwd, values['out-dir']), text);
+        // Written inside the project, the root is relative to the file, so the file works in any
+        // clone; written elsewhere, it stays absolute.
+        const out = values['out-dir'] ? path.resolve(cwd, values['out-dir']) : undefined;
+        const from = out ? path.dirname(out) : path.resolve(cwd);
+        const rel = path.relative(model.root, from);
+        const inside = !rel.startsWith('..') && !path.isAbsolute(rel);
+        const root = inside ? path.relative(from, model.root).replace(/\\/g, '/') || '.' : model.root;
+        const text = serialiseModel({ ...model, root });
+        if (out) writeFileSync(out, text);
         else process.stdout.write(text);
         return 0;
       }
@@ -399,7 +456,7 @@ export async function main(argv: string[], cwd = process.cwd()): Promise<number>
       process.stderr.write(`tzap: ${(e as Error).message}\n`);
       return 2;
     }
-    if ((e as Error).name === 'GitScopeError') {
+    if (e instanceof DiscoveryError || (e as Error).name === 'GitScopeError') {
       process.stderr.write(`tzap: ${(e as Error).message}\n`);
       return 2;
     }

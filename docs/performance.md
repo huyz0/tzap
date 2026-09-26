@@ -105,18 +105,17 @@ Vitest package. The Jest runner and the frontend fixtures exist; the benchmark v
   the edited file whose tests import it; StrykerJS reuses results unless the mutant's own text
   changed, which is faster and unsound when a mutant's behaviour depends on a changed callee.
 
-## Speed targets
+## Why diff runs gain least
 
-| Scenario | Required | Measured | Verdict |
-|---|---|---:|---|
-| S1 full run | ≥ 3x | 7.1x | **met** |
-| S3 10-line diff | ≥ 10x | 4.5x (fixture), 3.4x (remeda) | **not met** |
+| Scenario | Measured |
+|---|---:|
+| S1 full run | 7.1x |
+| S3 10-line diff | 4.5x (fixture), 3.4x (remeda) |
 
-S3's criterion assumed a suite whose dry run is expensive — the cost StrykerJS pays for every
+A diff run gains most on a suite whose dry run is expensive — the cost StrykerJS pays for every
 diff and tzap narrows away. On the fixture StrykerJS's whole dry run takes 0.4 s, so there is
 little to narrow away, and tzap's fixed floor (a runner boot and a coverage pass of the tests
-that can reach the change) dominates. So S3 was also measured on a real suite, below; it is not
-met there either.
+that can reach the change) dominates. So S3 was also measured on a real suite, below.
 
 ### S3 on a real suite: remeda
 

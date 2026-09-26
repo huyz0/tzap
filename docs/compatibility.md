@@ -19,7 +19,7 @@ untested; a result from it should be checked against `--engine reference` before
 | Vitest | 4.1.x | runs (used for the StrykerJS comparison); not in the CI matrix |
 | Jest | 30.5, 29.7 | supported, in band. On 29, `test.concurrent` tests run one at a time (as on 30), with their `beforeEach`/`afterEach` around them |
 | node:test | Node 22.15+ | supported; TypeScript tests through Node's own type stripping only |
-| Mocha | — | in progress |
+| Mocha | 12.0 | supported, in the host process; TypeScript tests through Node's own type stripping, or the project's `--require` loaders |
 | Bun, Deno | — | not supported; see [spikes/C-bun-deno.md](spikes/C-bun-deno.md) |
 | Karma, Jasmine | — | not supported (Karma is deprecated; Angular 21 moved to Vitest) |
 

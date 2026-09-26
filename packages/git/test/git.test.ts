@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { GitScopeError, gitChangedLines } from '../src/index.js';
+import { GitScopeError, gitChangedLines, repositoryPrefix } from '../src/index.js';
 
 const temps: string[] = [];
 afterAll(() => { for (const t of temps) rmSync(t, { recursive: true, force: true, maxRetries: 5 }); });
@@ -239,5 +239,19 @@ describe('gitChangedLines errors', () => {
     r.write('x.ts', 'x\n'); r.commit();
     const other = repo();
     await fails(gitChangedLines({ cwd: r.dir, root: other.dir }), /not inside the repository/);
+  });
+});
+
+describe('repositoryPrefix', () => {
+  it("is a directory's path within its repository, empty at the top, and undefined outside one", async () => {
+    const repo = path.resolve(import.meta.dirname, '../../..');
+    expect(await repositoryPrefix(repo)).toBe('');
+    expect(await repositoryPrefix(path.join(repo, 'packages/git'))).toBe('packages/git/');
+    const outside = mkdtempSync(path.join(tmpdir(), 'tzap-no-repo-'));
+    try {
+      expect(await repositoryPrefix(outside)).toBeUndefined();
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

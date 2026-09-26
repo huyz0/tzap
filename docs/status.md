@@ -81,7 +81,7 @@ defect:
 **Correctness** — `tools/parity`, StrykerJS 10.0.0 and tzap over the same corpus and Vitest
 version, every difference classified in `tools/parity/parity-baseline.yaml` and the gate failing
 on anything unlisted; each accepted difference carries its evidence in that file. The three tzap
-bugs it found (A1–A3) are fixed.
+bugs it found are fixed.
 
 **Speed** — `tools/bench`, a generated 40-module, 200-test Vitest package (1,495 mutants),
 Windows, median of 5 (tzap) and 3 (StrykerJS at its fastest concurrency, 10), build `a1a4249`,
@@ -97,13 +97,12 @@ better read as 6–7x.
 | S6 one-line change, warm cache | 1.79 s | 8.77 s | 4.9x |
 | S9 static-heavy | 13.07 s | 20.94 s | 1.6x |
 
-## Speed targets
+## Where the speed comes from, and where it runs out
 
-- **S1 ≥ 3x: met** (7.1x at identical inventory: 1,495 shared mutants, none unique to either
-  tool; 6.3x against the previous report's StrykerJS time).
-- **S3 ≥ 10x: not met**, on either suite. On the fixture (4.5x) StrykerJS's full dry run costs
-  0.4 s, because its 200 tests take milliseconds: the cost the criterion targets barely exists,
-  and tzap's fixed floor (a runner boot and a coverage pass) dominates. On remeda's real suite
+- **A full run is 7.1x** at identical inventory (1,495 shared mutants, none unique to either tool).
+- **A diff run is 4.5x on the fixture and 3.4x on a real suite.** On the fixture StrykerJS's full
+  dry run costs 0.4 s, because its 200 tests take milliseconds: there is little for narrowing to
+  save, and tzap's fixed floor (a runner boot and a coverage pass) dominates. On remeda's real suite
   (2,226 tests, 15.5 s) it is 3.4x — 14.1 s against 47.5 s, up from 2.6x once coverage stopped
   repeating tests that reach no mutant and static mutants were tried in one file first — where
   the derived patch hit an internal helper most of the library goes through, so the change
@@ -131,7 +130,7 @@ better read as 6–7x.
 
 ## Known limitations
 
-- **The 10x diff-run target is not met**, on the benchmark fixture or on remeda's real suite (above).
+- **Diff runs gain least** (3.4–4.5x, above): a runner boot and a coverage pass are a floor tzap pays on every run.
 - **Type-invalid mutants the tests killed** still count as detected under `--typecheck survivors`
   (the default); `--typecheck all` removes that bias at the cost of checking every mutant.
 - **`--verify-survivors auto` assumes third-party packages hold no state a project mutant
@@ -146,7 +145,7 @@ better read as 6–7x.
   fires between tests) is not attributed to the try that caused it in a warm Vitest session.
   A mutant that only such a failure detects is still reported correctly when it is static (it
   runs isolated) or when survivor verification re-runs it in a fresh session; with
-  `--verify-survivors none` it can be reported Survived.
+  `--verify-survivors off` it can be reported Survived.
 
 ## Running the checks
 

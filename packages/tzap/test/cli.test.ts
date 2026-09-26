@@ -74,6 +74,18 @@ describe('the command line', () => {
       [['run', '--scope', 'hunk', '--patch', 'x.patch'], /--scope: expected line, function or file/],
       [['run', '--scope', 'function'], /--scope widens a diff scope/],
       [['list-mutants', '--mutators', 'Nope'], /--mutators: unknown Nope/],
+      [['list-mutants', '--format', 'xml'], /--format: expected json or table/],
+      // Checked before anything runs, so a dry run is a real check of the flags.
+      [['run', '--verify-survivors', 'bogus', '--dry-run'], /--verify-survivors: expected auto, all or off/],
+      [['run', '--typecheck', 'bogus', '--dry-run'], /--typecheck: expected off, survivors or all/],
+      // An option another command takes is not silently ignored.
+      [['model', '-m', 'x.json'], /model does not take --model/],
+      [['run', '--format', 'table'], /run does not take --format/],
+      // Files and packages the user named that are not there.
+      [['run', '-m', 'missing.json'], /--model: cannot read .*missing\.json/],
+      [['run', '--patch', 'missing.diff'], /--patch: cannot read .*missing\.diff/],
+      [['run', '--filter', 'nonexistent', '--dry-run'], /matched no package/],
+      [['list-mutants', '--filter', 'nonexistent'], /matched no package/],
     ];
     for (const [args, message] of cases) {
       err = '';
@@ -98,7 +110,18 @@ describe('the command line', () => {
     out = '';
     expect(await tzap(['model', '-o', file])).toBe(0);
     expect(out).toBe('');
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(model);
+    // Inside the project the root is relative, so the model works in any clone; outside, absolute.
+    expect(path.resolve(sample, model.root)).toBe(repo);
+    const written = JSON.parse(readFileSync(file, 'utf8'));
+    expect(written.root).toBe(repo);
+    expect({ ...written, root: model.root }).toEqual(model);
+  });
+
+  it('reads patch paths relative to the repository root, whatever directory it runs from', async () => {
+    const patch = path.join(scratch, 'root.diff');
+    writeFileSync(patch, ['--- a/fixtures/sample-vitest/src/strings.ts', '+++ b/fixtures/sample-vitest/src/strings.ts', '@@ -1,1 +1,1 @@', '-x', '+y', ''].join('\n'));
+    expect(await tzap(['run', '--patch', patch, '--dry-run'])).toBe(0);
+    expect(out).toContain('1 of 2 source files in scope');
   });
 
   it('lists the inventory run would analyse: same mutators, reductions and scope', async () => {
@@ -155,5 +178,11 @@ describe('the tzap executable', () => {
     const usage = exec(['nonsense']);
     expect(usage.status).toBe(2);
     expect(usage.stderr).toContain('unknown command "nonsense"');
+  });
+});
+
+describe('the version', () => {
+  it('is the one the package publishes', () => {
+    expect(VERSION).toBe(JSON.parse(readFileSync(path.join(repo, 'packages/tzap/package.json'), 'utf8')).version);
   });
 });

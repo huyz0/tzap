@@ -368,3 +368,12 @@ function samePath(a: string, b: string): boolean {
   };
   return norm(a) === norm(b);
 }
+
+/**
+ * Where `dir` sits in its repository, as a path prefix ("packages/app/", or "" at the root), for
+ * paths that must be repository-relative; undefined outside a repository or without git.
+ */
+export async function repositoryPrefix(dir: string): Promise<string | undefined> {
+  const r = await gitRaw(dir, ['rev-parse', '--show-prefix']).catch(() => undefined);
+  return r?.ok ? line1(r.stdout) : undefined;
+}

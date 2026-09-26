@@ -166,6 +166,13 @@ describe('github', () => {
     );
   });
 
+  it('places files by their path in the repository when the analysis root is a subdirectory', () => {
+    const ctx = { repositoryPrefix: 'packages/app/' };
+    expect(githubReport(fixture(), ctx)).toContain('::warning file=packages/app/src/math.ts,line=6,');
+    const uris = sarifReport(fixture(), ctx).runs[0]!.results.map((r) => r.locations[0]!.physicalLocation.artifactLocation.uri);
+    expect(uris.every((u) => u.startsWith('packages/app/src/'))).toBe(true);
+  });
+
   it("stops at GitHub's per-step limit, ranked by file then line, and says how many were left out", () => {
     const lines = githubReport(manySurvivors(13)).trimEnd().split('\n');
     const warnings = lines.filter((l) => l.startsWith('::warning '));

@@ -40,8 +40,8 @@ export const reporters: Record<string, Reporter> = {
   elements: (r) => ({ file: elementsJson(r) }),
   html: (r) => ({ file: htmlReport(r) }),
   agent: (r) => ({ stdout: agentReport(r) }),
-  github: (r) => ({ stdout: githubReport(r) }),
-  sarif: (r) => ({ file: sarifJson(r) }),
+  github: (r, ctx) => ({ stdout: githubReport(r, ctx) }),
+  sarif: (r, ctx) => ({ file: sarifJson(r, ctx) }),
   markdown: (r, ctx) => ({ file: markdownReport(r, ctx) }),
 };
 

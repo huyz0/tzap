@@ -161,7 +161,8 @@ cd my-monorepo && npx tzap run
 ```
 
 Run from inside a package to analyse just that one. `--filter pkg-a,pkg-b` picks packages by
-name or directory.
+name or directory. (With a root Vitest config that declares `test.projects`, the workspace is one
+package to tzap, so a run from inside a project analyses them all.)
 
 A root `vitest.config.ts` with `test.projects` is recognised: one run covers every project.
 

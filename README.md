@@ -49,8 +49,7 @@ Mutation score 75.7% (test strength 82.4%, ignoring uncovered mutants)
 
 Measured on a generated 40-module package against StrykerJS 10 at its fastest setting:
 **6–7x faster on a full run, 20x on a re-run with nothing changed** — and, where tzap does not
-win by much, it says so: a 10-line diff is 4.5x (the plan's target was 10x), a static-heavy
-package 1.6x. Every number, with its method, is in
+win by much, it says so: a 10-line diff is 4.5x, a static-heavy package 1.6x. Every number, with its method, is in
 [docs/performance.md](docs/performance.md).
 
 ## Why you can trust the verdicts

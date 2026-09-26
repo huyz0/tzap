@@ -1,5 +1,5 @@
 import { score, type AnalysisResult } from '@tzap/model';
-import { describe, pct, sorted } from './util.js';
+import { describe, inRepository, pct, sorted, type ReportContext } from './util.js';
 
 /** GitHub shows at most this many annotations of one level from one step; the rest are dropped silently. */
 export const GITHUB_ANNOTATION_LIMIT = 10;
@@ -20,12 +20,12 @@ export function escapeProperty(s: string): string {
  * rather than letting GitHub drop them without a word. Uncovered mutants are not annotated: a
  * review comment on untested code is a coverage conversation, not a mutation one.
  */
-export function githubReport(result: AnalysisResult): string {
+export function githubReport(result: AnalysisResult, ctx: Pick<ReportContext, 'repositoryPrefix'> = {}): string {
   const survivors = sorted(result.mutants, 'Survived');
   const out = survivors.slice(0, GITHUB_ANNOTATION_LIMIT).map((m) => {
     const { start, end } = m.location;
     const props = [
-      `file=${escapeProperty(m.file)}`,
+      `file=${escapeProperty(inRepository(m.file, ctx))}`,
       `line=${start.line}`,
       `col=${start.column}`,
       `endLine=${end.line}`,
