@@ -9,3 +9,4 @@ reports/
 dist-npm/
 .claude/launch.json
 .claude/scheduled_tasks.lock
+coverage/
