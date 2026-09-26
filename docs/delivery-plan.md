@@ -56,7 +56,7 @@ building; what building it changed is recorded at the end rather than edited in.
 | M3 Inventory | **Done**: Stryker's seventeen mutators under Stryker's names, disable comments, stable ids, hand-written expectations |
 | M4 Parity harness (inventory) | **Done**: `tools/parity`, Tier A and three Tier B libraries pinned by commit, gate in both directions |
 | M5 Instrumentation + Vitest + coverage | **Done**: schemata by span splicing, runtime shim, Vite plugin delivery, per-test coverage run twice |
-| M6 Reference kill loop | **Done**: `--engine reference`; parity 97–99.9% on real libraries, every difference classified |
+| M6 Reference kill loop | **Done**: `--engine reference`; parity 96.6–99.9% on real libraries, every difference classified |
 | M7 Bench harness | **Done**: `tools/bench`, S1/S3/S4/S5/S6/S9; S2/S7/S8 declared; RSS and CPU-seconds not yet collected |
 | M8a/b Warm pool, schemata switching | **Done** differently: many mutants per runner invocation through the runner's own repeat/retry loop, instead of a worker pool the engine owns |
 | M9 Selection, ordering, hangs | **Done**: covering tests only, previous killer first, early exit everywhere, loop and hit counting, silence backstop |

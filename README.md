@@ -56,7 +56,7 @@ package 1.2x. Every number, with its method, is in
 ## Why you can trust the verdicts
 
 - **StrykerJS parity**: on es-toolkit, superjson and remeda, tzap and StrykerJS agree on
-  97–99.9% of the mutants both generate, and every remaining difference is classified — a
+  96.6–99.9% of the mutants both generate, and every remaining difference is classified — a
   StrykerJS limitation, a deliberate difference, or nondeterminism — in
   `tools/parity/parity-baseline.yaml`. The gate fails on anything else.
 - **A reference engine**, one fresh process per mutant with nothing reused, kept forever:
