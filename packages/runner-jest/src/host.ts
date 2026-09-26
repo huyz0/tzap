@@ -10,7 +10,6 @@
  */
 import { createRequire } from 'node:module';
 import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import type { FileOutcome, HostRequest, HostResponse, RunRequest, RunResult, SessionOptions, TestOutcome } from '@tzap/protocol';
 import type { RunState, StateKey } from './shared.cjs';
@@ -119,8 +118,8 @@ async function init(o: SessionOptions): Promise<void> {
     transform,
     transformIgnorePatterns: [...project.transformIgnorePatterns, under(realpathSync(dist)), under(realpathSync(runtimeDir))],
     testEnvironment: envShim,
-    // Instrumented outputs never land in the project's own cache.
-    cacheDirectory: path.join(os.tmpdir(), 'tzap-jest-cache'),
+    // Instrumented outputs never land in the project's own cache, nor outlive the analysis.
+    cacheDirectory: path.join(o.tmpDir, 'jest-cache'),
     collectCoverage: false,
   };
   delete raw.projects;

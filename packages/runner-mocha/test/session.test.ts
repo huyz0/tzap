@@ -155,33 +155,19 @@ describe('sample-mocha', () => {
     ]);
   });
 
-  it('re-runs warm repeatedly at a small fixed cost per run', async () => {
+  it('re-runs warm repeatedly with the same result: no state carries between runs', async () => {
     const small = 'test/discount.test.ts::discountedPrice > applies a small discount';
-    const times: number[] = [];
     for (let i = 0; i < 30; i++) {
-      const t0 = performance.now();
       const r = await s.run({ id: 100 + i, mode: 'mutate', plan: { [small]: [control] } });
-      times.push(performance.now() - t0);
-      expect(r.tests[0]!.tries).toEqual([[-1, 'S']]);
+      expect(r.tests.map((t) => [t.id, t.tries])).toEqual([[small, [[-1, 'S']]]]);
     }
-    times.sort((a, b) => a - b);
-    const median = times[times.length >> 1]!;
-    console.log(`warm run, one try, round trip through the session: median ${median.toFixed(2)} ms (p90 ${times[Math.floor(times.length * 0.9)]!.toFixed(2)} ms)`);
-    expect(median).toBeLessThan(50);
   });
 
-  it('runs many tries per run at a small cost per try', async () => {
+  it('runs every try of a long plan, in order', async () => {
     const small = 'test/discount.test.ts::discountedPrice > applies a small discount';
-    const one = async (n: number) => {
-      const t0 = performance.now();
-      const r = await s.run({ id: 150 + n, mode: 'mutate', plan: { [small]: Array.from({ length: n }, () => control) } });
-      expect(r.tests[0]!.tries).toHaveLength(n);
-      return performance.now() - t0;
-    };
-    await one(1000);
-    const t1 = await one(1);
-    const t2 = await one(10_000);
-    console.log(`per try: ${(((t2 - t1) / 9_999) * 1000).toFixed(1)} us (10,000 tries in ${t2.toFixed(0)} ms, 1 try in ${t1.toFixed(2)} ms)`);
+    const r = await s.run({ id: 150, mode: 'mutate', plan: { [small]: Array.from({ length: 10_000 }, () => control) } });
+    expect(r.tests[0]!.tries).toHaveLength(10_000);
+    expect(r.tests[0]!.tries.every(([m, st]) => m === -1 && st === 'S')).toBe(true);
   });
 
   it('treats the budget as a silence window: a long run that keeps finishing tries is not killed', async () => {

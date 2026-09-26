@@ -142,6 +142,11 @@ better read as 6–7x.
   Both are detected, and both count the same in the score.
 - **Arrow functions**: coverage counts when the body runs, not when the arrow is created, so an
   arrow no test calls is NoCoverage where StrykerJS says Survived (parity class C3).
+- **A failure raised after a test's last `afterEach`** (in an `afterAll`, or by a timer that
+  fires between tests) is not attributed to the try that caused it in a warm Vitest session.
+  A mutant that only such a failure detects is still reported correctly when it is static (it
+  runs isolated) or when survivor verification re-runs it in a fresh session; with
+  `--verify-survivors none` it can be reported Survived.
 
 ## Running the checks
 

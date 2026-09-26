@@ -6,4 +6,4 @@
 export { HostedSession, progressDir, type HostedRunner } from './session.js';
 export { serveHost, type HostedExecutor, type HostSetup } from './serve.js';
 export { InstrumentedModules } from './modules.js';
-export { cleanUrl, firstMessage, realPath, sameHits, urlToNorm } from './util.js';
+export { cleanUrl, firstMessage, realPath, urlToNorm } from './util.js';

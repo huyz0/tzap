@@ -103,6 +103,7 @@ function message(e: unknown): string {
   return s.length > 300 ? `${s.slice(0, 297)}...` : s;
 }
 
+/** As @tzap/protocol's sameHits: this module runs inside Jest's CommonJS sandbox, which cannot load that one. */
 function sameHits(a: Array<[number, number]>, b: Array<[number, number]>): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i]![0] !== b[i]![0] || a[i]![1] !== b[i]![1]) return false;
@@ -173,7 +174,7 @@ function extend(Base: Env): Env {
           const name = [...names, child.name].join(' > ');
           const n = seen.get(name) ?? 0;
           seen.set(name, n + 1);
-          const id = `${rel}::${name}${n > 0 ? `#${n}` : ''}`;
+          const id = `${rel}::${name}${n > 0 ? ` #${n + 1}` : ''}`;
           let plan: Try[] | undefined;
           if (run.mode === 'coverage') {
             if (child.mode !== 'skip' && child.mode !== 'todo') plan = [{ m: -1, N: Infinity, L: Infinity }, { m: -1, N: Infinity, L: Infinity }];

@@ -5,11 +5,11 @@
  * that reliably stops synchronous JavaScript.
  */
 import { createRequire } from 'node:module';
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { FileOutcome, HostRequest, HostResponse, RunRequest, RunResult, SessionOptions, TestOutcome } from '@tzap/protocol';
-import { PROGRESS_DIR_ENV } from '@tzap/protocol';
+import { PROGRESS_DIR_ENV, sameHits } from '@tzap/protocol';
 
 const send = (m: HostResponse) => process.send?.(m);
 
@@ -98,9 +98,23 @@ async function init(o: SessionOptions): Promise<void> {
   // resolves exactly as the user's test files do, to the same Vitest instance.
   const shimDir = path.join(pkgRoot, 'node_modules', '.tzap');
   mkdirSync(shimDir, { recursive: true });
+  // A host that was killed (a hang) left its shim behind: clear those whose process is gone.
+  for (const f of readdirSync(shimDir)) {
+    const pid = Number(/^setup-(\d+)\.mjs$/.exec(f)?.[1]);
+    if (pid && !alive(pid)) rmSync(path.join(shimDir, f), { force: true });
+  }
   const shim = path.join(shimDir, `setup-${process.pid}.mjs`);
   const setupUrl = pathToFileURL(path.join(import.meta.dirname, 'worker-setup.js')).href;
   writeFileSync(shim, `import * as vitest from 'vitest';\nimport { setup } from ${JSON.stringify(setupUrl)};\nsetup(vitest);\n`);
+  // However the host ends, the shim goes, and its directory with it once no other host uses it.
+  process.on('exit', () => {
+    rmSync(shim, { force: true });
+    try {
+      rmdirSync(shimDir);
+    } catch {
+      // another host's shim is still there
+    }
+  });
 
   let threads = false;
   let rootSeen = false;
@@ -232,12 +246,6 @@ function expandProjects(projects: unknown[], root: string, plugin: object): unkn
   return out;
 }
 
-function sameHits(a: Array<[number, number]>, b: Array<[number, number]>): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i]![0] !== b[i]![0] || a[i]![1] !== b[i]![1]) return false;
-  return true;
-}
-
 function toArray(v: unknown): Array<[number, number]> | undefined {
   return Array.isArray(v) ? (v as Array<[number, number]>) : undefined;
 }
@@ -329,3 +337,13 @@ process.on('message', (msg: HostRequest) => {
 process.on('unhandledRejection', (e) => {
   send({ type: 'error', message: `unhandled rejection in the Vitest host: ${String((e as Error)?.stack ?? e)}`, during: 'background' });
 });
+
+/** Whether a process with this id exists. */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}

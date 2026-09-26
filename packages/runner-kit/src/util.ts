@@ -44,10 +44,3 @@ export function firstMessage(err: unknown): string | undefined {
   const m = (typeof inner === 'object' && inner !== null && 'message' in inner ? String((inner as Error).message) : String(inner)).replace(ANSI, '');
   return m.length > MESSAGE_LIMIT ? `${m.slice(0, MESSAGE_LIMIT - 3)}...` : m;
 }
-
-/** Whether two runs of a test hit the same sites the same number of times. */
-export function sameHits(a: ReadonlyArray<readonly [number, number]>, b: ReadonlyArray<readonly [number, number]>): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i]![0] !== b[i]![0] || a[i]![1] !== b[i]![1]) return false;
-  return true;
-}

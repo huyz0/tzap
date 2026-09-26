@@ -27,8 +27,8 @@ import { createRequire } from 'node:module';
 import * as nodeModule from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { normPath as norm, type FileOutcome, type RunMode, type RunRequest, type RunResult, type SessionOptions, type TestOutcome, type Try, type TryOutcome } from '@tzap/protocol';
-import { firstMessage, InstrumentedModules, sameHits } from '@tzap/runner-kit';
+import { normPath as norm, sameHits, type FileOutcome, type RunMode, type RunRequest, type RunResult, type SessionOptions, type TestOutcome, type Try, type TryOutcome } from '@tzap/protocol';
+import { firstMessage, InstrumentedModules } from '@tzap/runner-kit';
 import { activateStatic, beginTry, drainHits, endTry, install, type TzapRuntime } from '@tzap/runtime';
 
 // --- the parts of Mocha the executor uses -----------------------------------------------------

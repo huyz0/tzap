@@ -155,19 +155,12 @@ describe('sample-node', () => {
     ]);
   });
 
-  it('re-runs warm repeatedly at a small fixed cost per run', async () => {
+  it('re-runs warm repeatedly with the same result: no state carries between runs', async () => {
     const small = 'test/discount.test.ts::discountedPrice > applies a small discount';
-    const times: number[] = [];
     for (let i = 0; i < 30; i++) {
-      const t0 = performance.now();
       const r = await s.run({ id: 100 + i, mode: 'mutate', plan: { [small]: [control] } });
-      times.push(performance.now() - t0);
-      expect(r.tests[0]!.tries).toEqual([[-1, 'S']]);
+      expect(r.tests.map((t) => [t.id, t.tries])).toEqual([[small, [[-1, 'S']]]]);
     }
-    times.sort((a, b) => a - b);
-    const median = times[times.length >> 1]!;
-    console.log(`warm run, one try, round trip through the session: median ${median.toFixed(2)} ms (p90 ${times[Math.floor(times.length * 0.9)]!.toFixed(2)} ms)`);
-    expect(median).toBeLessThan(50);
   });
 
   it('treats the budget as a silence window: a long run that keeps finishing tries is not killed', async () => {

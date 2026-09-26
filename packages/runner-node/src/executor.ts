@@ -1,7 +1,7 @@
 /**
  * Runs node:test suites inside the current process, warm, many mutants per run.
  *
- * How (see the package README section in docs and the measurements in the final report):
+ * How (the "Execution" section of docs/architecture.md places this among the runners):
  *
  * - `run()` from `node:test` with `isolation: 'none'` imports the test files into this process.
  *   An ES module evaluates once per process, so a second `run()` with the same files would find
@@ -31,8 +31,8 @@ import { createRequire } from 'node:module';
 import * as nodeModule from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { normPath as norm, type FileOutcome, type RunMode, type RunRequest, type RunResult, type SessionOptions, type TestOutcome, type Try, type TryOutcome } from '@tzap/protocol';
-import { cleanUrl, firstMessage, InstrumentedModules, realPath, sameHits, urlToNorm } from '@tzap/runner-kit';
+import { normPath as norm, sameHits, type FileOutcome, type RunMode, type RunRequest, type RunResult, type SessionOptions, type TestOutcome, type Try, type TryOutcome } from '@tzap/protocol';
+import { cleanUrl, firstMessage, InstrumentedModules, realPath, urlToNorm } from '@tzap/runner-kit';
 import { activateStatic, beginTry, drainHits, endTry, install, type TzapRuntime } from '@tzap/runtime';
 
 const require = createRequire(import.meta.url);

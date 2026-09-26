@@ -128,7 +128,7 @@ describe.each(FIXTURES)('Jest $major', ({ name, major }) => {
       expect(t.get(SMALL)!.name).toBe('discountedPrice > applies a small discount');
       expect(t.get(SMALL)!.file).toBe(slash(path.join(FIXTURE, 'test/discount.test.ts')));
       expect(res.tests.some((x) => x.stateSensitive)).toBe(false);
-      expect(res.tests.every((x) => typeof x.duration === 'number')).toBe(true);
+      expect(res.tests.every((x) => Number.isFinite(x.duration) && x.duration >= 0)).toBe(true);
       const strings = res.files.find((f) => f.file.endsWith('strings.test.ts'))!;
       expect(strings.staticHits).toEqual([[3, 1]]);
       expect(res.files.find((f) => f.file.endsWith('discount.test.ts'))!.staticHits).toEqual([]);

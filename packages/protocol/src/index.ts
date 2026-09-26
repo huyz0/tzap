@@ -154,6 +154,13 @@ export type HostResponse =
   | { type: 'progress'; runId: number; test: string; mutant: number }
   | { type: 'error'; message: string; during: 'init' | 'run' | 'background' };
 
+/** Whether two runs of a test hit the same sites the same number of times (hits as `TestOutcome.hits`). */
+export function sameHits(a: ReadonlyArray<readonly [number, number]>, b: ReadonlyArray<readonly [number, number]>): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i]![0] !== b[i]![0] || a[i]![1] !== b[i]![1]) return false;
+  return true;
+}
+
 // --- progress files -------------------------------------------------------------------------
 //
 // A runner worker that a mutant has hung synchronously cannot say so: its event loop is blocked.
