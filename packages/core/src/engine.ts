@@ -136,11 +136,13 @@ class Timer {
 
 /**
  * Fastest-first ordering by measured duration, coarsely: durations jitter from run to run, and an
- * order that follows the jitter changes which test is credited with a kill. Everything under 5 ms
- * is one class; above that, one class per doubling.
+ * order that follows the jitter changes which test is credited with a kill. Everything under 50 ms
+ * is one class; above that, one class per factor of ten. Finer classes (5 ms, then per doubling)
+ * still reordered millisecond tests on a loaded machine: a garbage collection or a busy neighbour
+ * lifts a 1 ms test past 5 ms, never past 50.
  */
 function speedClass(ms: number | undefined): number {
-  return ms === undefined || ms < 5 ? 0 : 1 + Math.floor(Math.log2(ms / 5));
+  return ms === undefined || ms < 50 ? 0 : 1 + Math.floor(Math.log10(ms / 50));
 }
 
 const HIT_FACTOR = 100;
