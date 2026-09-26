@@ -154,6 +154,25 @@ describe('the cache', () => {
   }, 180_000);
 });
 
+describe('worker threads', () => {
+  it('falls back to the project pool when the baseline is not clean in threads, without changing a verdict', async () => {
+    const root = path.join(scratch, 'sample-chdir');
+    cpSync(fixture('sample-vitest'), root, { recursive: true, filter: (s) => !s.includes('node_modules') });
+    // process.chdir throws in a worker thread, and works in a forked process.
+    writeFileSync(
+      path.join(root, 'test/chdir.test.ts'),
+      "import { expect, it } from 'vitest';\nimport { joinNames } from '../src/strings';\nit('changes directory', () => {\n  process.chdir(process.cwd());\n  expect(joinNames(['a', 'b'])).toBe('a, b');\n});\n",
+    );
+    const m = model(root);
+    const messages: string[] = [];
+    const threaded = await run(m, { onEvent: (e) => void (e.type === 'info' && messages.push(e.message)) });
+    expect(messages.some((x) => x.includes('not clean in worker threads'))).toBe(true);
+    expect(threaded.redTests).toEqual([]);
+    const own = await run(m, { preferThreads: false });
+    expect(verdicts(threaded)).toEqual(verdicts(own));
+  }, 180_000);
+});
+
 describe('the cache and static mutants', () => {
   it('reuses a static survivor when an edit elsewhere cannot reach the tests that decided it', async () => {
     const root = path.join(scratch, 'hazards-edit');

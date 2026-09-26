@@ -41,6 +41,11 @@ export interface EngineOptions {
   runners: Readonly<Record<string, RunnerFactory>>;
   /** Worker count passed to each runner. */
   workers?: number;
+  /**
+   * Let runners use worker threads where the project has not chosen how its tests run (default
+   * true). A package whose baseline is not clean in threads falls back to its own setting.
+   */
+  preferThreads?: boolean;
   /** Concurrent sessions for the reference engine. */
   concurrency?: number;
   /** Previously killing test per mutant id, from the cache: tried first. */
@@ -271,8 +276,11 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
   const sessionFor = (pkg: PackageModel, isolate?: boolean, workers = options.workers): RunnerSession => {
     const factory = options.runners[pkg.runner!.kind];
     if (!factory) throw new Error(`no runner adapter for "${pkg.runner!.kind}" (package ${pkg.id})`);
-    return factory({ root, pkg, instrumented: instrumentedPath, isolate, workers, tmpDir });
+    const preferThreads = options.preferThreads !== false && !ownPool.has(pkg.id);
+    return factory({ root, pkg, instrumented: instrumentedPath, isolate, workers, tmpDir, ...(preferThreads ? { preferThreads } : {}) });
   };
+  /** Packages that run in their own pool: threads changed what their baseline did. */
+  const ownPool = new Set<string>();
 
   let runId = 1;
   const warm = new Map<string, RunnerSession>();
@@ -298,10 +306,8 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
   const allTestFiles = new Map<string, Set<string>>(); // pkg id -> test files
   try {
     for (const pkg of runnerPackages) {
-      const s = sessionFor(pkg);
-      const info = await s.start();
-      if (info.isolatesFiles) isolatesFiles.add(pkg.id);
-      if (info.staticPerFile) staticPerFile.add(pkg.id);
+      let s = sessionFor(pkg);
+      let info = await s.start();
       warm.set(pkg.id, s);
       let files: string[] | undefined;
       if (options.lines && s.listFiles) {
@@ -309,7 +315,29 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         files = all.filter(reachesMutated);
         emit({ type: 'narrowed', pkg: pkg.id, files: files.length, of: all.length });
       }
-      const res = files && files.length === 0 ? { id: 0, tests: [], files: [], durationMs: 0 } : await s.run({ id: runId++, mode: 'coverage', files });
+      const coverage = () => (files && files.length === 0 ? Promise.resolve({ id: 0, tests: [], files: [], durationMs: 0 } as RunResult) : s.run({ id: runId++, mode: 'coverage', files }));
+      // Threads are tzap's choice, not the project's: if anything in the baseline fails in them —
+      // or the run dies, as a native addon can take a thread's whole process down — that may be
+      // the threads, and the project's own setting is used instead. Whatever still fails there is
+      // the suite's own.
+      let res: RunResult | undefined;
+      try {
+        res = await coverage();
+      } catch (e) {
+        if (!info.threads) throw e;
+      }
+      if (info.threads && (!res || res.unhandledErrors?.length || res.files.some((f) => f.error) || res.tests.some((t) => t.state === 'fail'))) {
+        await s.close().catch(() => {});
+        ownPool.add(pkg.id);
+        emit({ type: 'info', message: `${pkg.id}: the baseline is not clean in worker threads; using the project's own pool` });
+        s = sessionFor(pkg);
+        info = await s.start();
+        warm.set(pkg.id, s);
+        res = await coverage();
+      }
+      if (!res) throw new Error(`${pkg.id}: the coverage run did not complete`);
+      if (info.isolatesFiles) isolatesFiles.add(pkg.id);
+      if (info.staticPerFile) staticPerFile.add(pkg.id);
       if (res.unhandledErrors?.length) {
         noisyUnhandled.add(pkg.id);
         emit({ type: 'warning', message: `${pkg.id}: the suite reports ${res.unhandledErrors.length} unhandled error(s) with no mutant active (${res.unhandledErrors[0]}); unhandled errors cannot count against mutants there` });
@@ -705,7 +733,10 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         if (!res.timedOut) {
           merged.tests.push(...res.tests);
           merged.files.push(...res.files);
-          if (res.unhandledErrors?.length) merged.unhandledErrors = [...(merged.unhandledErrors ?? []), ...res.unhandledErrors];
+          if (res.unhandledErrors?.length) {
+            merged.unhandledErrors = [...(merged.unhandledErrors ?? []), ...res.unhandledErrors];
+            merged.unhandledErrorFiles = [...(merged.unhandledErrorFiles ?? []), ...res.unhandledErrors.map((_, i) => res.unhandledErrorFiles?.[i] ?? null)];
+          }
           return merged;
         }
         const hung = new Set((res.inFlight ?? []).map((x) => x.mutant).filter((m) => m >= 0));
@@ -829,7 +860,11 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         const staticPlan: Record<string, number> = {};
         const files: string[] = [];
         for (const [f, it] of job.assign) {
-          const ts = testsByFile.get(`${job.pkgId}\0${f}`) ?? [];
+          // A static mutant is live from the moment the file loads: every test of the file judges
+          // it. Any other mutant is judged by the tests that reach it, and the worker skips the
+          // tests after the last of those.
+          const all = testsByFile.get(`${job.pkgId}\0${f}`) ?? [];
+          const ts = it.isStatic ? all : all.filter((t) => it.coveredBy.has(t.key));
           if (ts.length === 0) continue;
           staticPlan[f] = it.d.num;
           files.push(path.resolve(root, ts[0]!.file));
@@ -876,16 +911,29 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
           return;
         }
         if (res.unhandledErrors?.length && !noisyUnhandled.has(job.pkgId)) {
-          if (byNum.size > 1) {
+          // Each file of the run has its own mutant and its own modules: an error the runner
+          // attributes to a file is that file's mutant's, as `vitest run` would report it.
+          const owners = res.unhandledErrors.map((_, i) => {
+            const f = res.unhandledErrorFiles?.[i];
+            return f ? byNum.get(Number(staticPlan[normPath(f)] ?? NaN)) : undefined;
+          });
+          if (byNum.size > 1 && owners.every((o) => o !== undefined)) {
+            owners.forEach((it, i) => {
+              if (it!.killedBy) return;
+              it!.killedBy = `${job.pkgId}::unhandled error`;
+              it!.message = `unhandled error during the run: ${res.unhandledErrors![i]}`;
+            });
+          } else if (byNum.size > 1) {
             // Several mutants shared the run: decide each alone to see whose error it is.
             for (const it of byNum.values()) await runJob({ pkgId: job.pkgId, assign: new Map([...job.assign].filter(([, x]) => x === it)) }, session, retire);
             return;
-          }
-          // The suite fails with this mutant: `vitest run` would exit non-zero. Detected.
-          const it = [...byNum.values()][0]!;
-          if (!it.killedBy) {
-            it.killedBy = `${job.pkgId}::unhandled error`;
-            it.message = `unhandled error during the run: ${res.unhandledErrors[0]}`;
+          } else {
+            // The suite fails with this mutant: `vitest run` would exit non-zero. Detected.
+            const it = [...byNum.values()][0]!;
+            if (!it.killedBy) {
+              it.killedBy = `${job.pkgId}::unhandled error`;
+              it.message = `unhandled error during the run: ${res.unhandledErrors[0]}`;
+            }
           }
         }
         const fileMutant = new Map(Object.entries(staticPlan));
@@ -946,7 +994,10 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
               if (reuseWarm) warm.delete(job.pkgId);
               sessions.delete(job.pkgId);
             };
+            const tj = performance.now();
             await runJob(job, session, retire);
+            if (process.env.TZAP_DEBUG) process.stderr.write(`tzap debug: lane ${laneIndex} job ${[...new Set(job.assign.values())].map((it) => `${it.d.num}${it.isStatic ? 's' : 'v'}:${it.killedBy ? 'K' : it.tested}/${it.planned}`).join(',')} files=${job.assign.size} ${Math.round(performance.now() - tj)} ms
+`);
             if (fresh) {
               await Promise.all([...sessions.values()].map((s) => s.close()));
               sessions.clear();

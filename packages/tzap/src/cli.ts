@@ -55,6 +55,7 @@ const RUN_OPTIONS = {
   extreme: { type: 'boolean' },
   'no-verify-survivors': { type: 'boolean' },
   'verify-survivors': { type: 'string' },
+  'keep-pool': { type: 'boolean' },
   typecheck: { type: 'string' },
   tsconfig: { type: 'string' },
   'dry-run': { type: 'boolean' },
@@ -100,6 +101,9 @@ Run options:
                                 confirm warm survivors in isolation: those whose tests reach
                                 module state (auto, the default), all of them, or none
                                 (off, the fastest: state a test leaves behind can hide a kill)
+      --keep-pool               run Vitest in the project's default pool (forks) even when its
+                                config leaves the pool unset; by default tzap uses worker threads
+                                there, and falls back if the baseline is not clean in them
       --dry-run                 print what would be analysed, and stop
   -q, --quiet                   no progress output
 
@@ -269,6 +273,7 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
     lines: changed?.files,
     runners: { vitest: createVitestSession, jest: createJestSession, node: createNodeTestSession, mocha: createMochaSession },
     workers,
+    ...(values['keep-pool'] ? { preferThreads: false } : {}),
     concurrency,
     tzapVersion: VERSION,
     previousKillers: cache?.killers,

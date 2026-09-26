@@ -11,13 +11,13 @@ export class VitestSession implements RunnerSession {
   private child: ChildProcess | undefined;
   private pending: { resolve: (r: RunResult) => void; reject: (e: Error) => void; id: number } | undefined;
   private readonly inFlight = new Map<string, number>();
-  private starting: { resolve: (v: { runnerVersion: string; staticPerFile?: boolean; isolatesFiles?: boolean }) => void; reject: (e: Error) => void } | undefined;
+  private starting: { resolve: (v: { runnerVersion: string; staticPerFile?: boolean; isolatesFiles?: boolean; threads?: boolean }) => void; reject: (e: Error) => void } | undefined;
   private stderr = '';
   private listing: ((files: string[]) => void) | undefined;
 
   constructor(private readonly options: SessionOptions) {}
 
-  start(): Promise<{ runnerVersion: string; staticPerFile?: boolean; isolatesFiles?: boolean }> {
+  start(): Promise<{ runnerVersion: string; staticPerFile?: boolean; isolatesFiles?: boolean; threads?: boolean }> {
     const hostPath = path.join(import.meta.dirname, 'host.js');
     const child = fork(hostPath, [], {
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
@@ -56,7 +56,7 @@ export class VitestSession implements RunnerSession {
       case 'ready':
         // The setup file knows which test file it runs for, so an isolated run can activate a
         // different static mutant in each file.
-        this.starting?.resolve({ runnerVersion: m.runnerVersion, staticPerFile: true, isolatesFiles: m.isolatesFiles === true });
+        this.starting?.resolve({ runnerVersion: m.runnerVersion, staticPerFile: true, isolatesFiles: m.isolatesFiles === true, threads: m.threads === true });
         this.starting = undefined;
         break;
       case 'files':

@@ -93,6 +93,11 @@ export interface RunResult {
    * no single try.
    */
   unhandledErrors?: string[];
+  /**
+   * Per unhandled error, the test file the runner itself attributes it to (Vitest's "this error
+   * originated in ..."), or null when it does not.
+   */
+  unhandledErrorFiles?: Array<string | null>;
   /** The session was killed by the wall-clock backstop; `inFlight` names what was running. */
   timedOut?: boolean;
   inFlight?: Array<{ test: string; mutant: number }>;
@@ -109,6 +114,12 @@ export interface SessionOptions {
   isolate?: boolean;
   /** Worker count for the runner's own pool. */
   workers?: number;
+  /**
+   * Run in worker threads when the project has not chosen how its tests run (Vitest: no `pool`,
+   * `execArgv` or `projects` in its config). A thread starts in a fraction of a process's time,
+   * which is most of the cost of a run that re-imports modules. The runner reports whether it did.
+   */
+  preferThreads?: boolean;
   /** Absolute scratch directory the session may write to. */
   tmpDir: string;
 }
@@ -119,7 +130,7 @@ export interface RunnerSession {
    * `isolatesFiles`: every test file gets fresh module state on every run (Jest does), so a
    * static mutant can run in this same session rather than in a separately isolated one.
    */
-  start(): Promise<{ runnerVersion: string; isolatesFiles?: boolean; staticPerFile?: boolean }>;
+  start(): Promise<{ runnerVersion: string; isolatesFiles?: boolean; staticPerFile?: boolean; threads?: boolean }>;
   /** Absolute paths of every test file the runner would run. Optional: without it, a diff run cannot narrow its coverage phase. */
   listFiles?(): Promise<string[]>;
   run(request: RunRequest): Promise<RunResult>;
@@ -137,7 +148,7 @@ export type HostRequest =
   | { type: 'close' };
 
 export type HostResponse =
-  | { type: 'ready'; runnerVersion: string; isolatesFiles?: boolean }
+  | { type: 'ready'; runnerVersion: string; isolatesFiles?: boolean; threads?: boolean }
   | { type: 'result'; result: RunResult }
   | { type: 'files'; files: string[] }
   | { type: 'progress'; runId: number; test: string; mutant: number }

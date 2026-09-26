@@ -89,11 +89,23 @@ async function init(o: SessionOptions): Promise<void> {
   const setupUrl = pathToFileURL(path.join(import.meta.dirname, 'worker-setup.js')).href;
   writeFileSync(shim, `import * as vitest from 'vitest';\nimport { setup } from ${JSON.stringify(setupUrl)};\nsetup(vitest);\n`);
 
+  let threads = false;
+  let rootSeen = false;
   const plugin = {
     name: 'tzap:instrument',
     enforce: 'pre' as const,
-    config(cfg: { root?: string; test?: { setupFiles?: string | string[]; projects?: unknown[]; fsModuleCache?: boolean } }) {
+    config(cfg: { root?: string; test?: { setupFiles?: string | string[]; projects?: unknown[]; fsModuleCache?: boolean; pool?: unknown; execArgv?: unknown } }) {
       cfg.test ??= {};
+      // Vitest's default pool starts a process for every test file of every run; a thread starts
+      // several times faster. Only when the project left the choice to Vitest: a chosen pool, or
+      // execArgv (process flags a thread cannot take), is kept, and so are projects, which choose
+      // their own. Only the root config decides: this hook also runs for every project's config.
+      const isRoot = !rootSeen;
+      rootSeen = true;
+      if (isRoot && o.preferThreads && cfg.test.pool === undefined && cfg.test.execArgv === undefined && cfg.test.projects === undefined) {
+        cfg.test.pool = 'threads';
+        threads = true;
+      }
       const s = cfg.test.setupFiles;
       cfg.test.setupFiles = [shim, ...(s === undefined ? [] : Array.isArray(s) ? s : [s])];
       // Instrumented code must never reach Vitest's persistent transform cache, where a later
@@ -135,7 +147,7 @@ async function init(o: SessionOptions): Promise<void> {
   // With isolation on (Vitest's default), every run re-imports each test file's modules, so this
   // same session can decide static mutants without a second, isolated one.
   const isolate = (vitest as unknown as { config: { isolate?: boolean } }).config.isolate !== false;
-  send({ type: 'ready', runnerVersion: vitestPkg.version, isolatesFiles: isolate && o.isolate !== false });
+  send({ type: 'ready', runnerVersion: vitestPkg.version, isolatesFiles: isolate && o.isolate !== false, threads });
 }
 
 const CONFIG_NAMES = ['vitest.config', 'vite.config'].flatMap((b) => ['ts', 'mts', 'cts', 'js', 'mjs', 'cjs'].map((e) => `${b}.${e}`));
@@ -229,9 +241,15 @@ async function run(req: RunRequest): Promise<RunResult> {
   const tests: TestOutcome[] = [];
   const files: FileOutcome[] = [];
   const unhandled: string[] = [];
+  const unhandledFiles: Array<string | null> = [];
   if (specs.length > 0) {
     const res = await v.runTestSpecifications(specs);
-    for (const e of res.unhandledErrors ?? []) unhandled.push(String((e as { message?: string })?.message ?? e).slice(0, 300));
+    for (const e of res.unhandledErrors ?? []) {
+      unhandled.push(String((e as { message?: string })?.message ?? e).slice(0, 300));
+      // Vitest tags an error raised while a test file runs with that file's path.
+      const origin = (e as { VITEST_TEST_PATH?: unknown })?.VITEST_TEST_PATH;
+      unhandledFiles.push(typeof origin === 'string' ? path.resolve(v.config.root, origin) : null);
+    }
     // The result lists every module Vitest has ever run in this instance, not only this run's.
     const ran = new Set(specs.map((s) => norm(s.moduleId)));
     for (const mod of res.testModules) {
@@ -271,7 +289,10 @@ async function run(req: RunRequest): Promise<RunResult> {
     }
   }
   const out: RunResult = { id: req.id, tests, files, durationMs: performance.now() - started };
-  if (unhandled.length) out.unhandledErrors = unhandled;
+  if (unhandled.length) {
+    out.unhandledErrors = unhandled;
+    out.unhandledErrorFiles = unhandledFiles;
+  }
   return out;
 }
 

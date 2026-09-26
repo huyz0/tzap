@@ -132,7 +132,8 @@ export function setup(vitest: Vitest): void {
     const tr = tries[i]!;
     // m === -1 is a control try: the test unmutated, bracketing the mutant tries so the engine
     // can tell a test that fails because of its context from one that fails because of a mutant.
-    if (payload.mode === 'mutate' && tr.m >= 0 && ws.killed.has(tr.m)) {
+    // A kill decides the mutant: its remaining tries, warm or isolated, would decide nothing.
+    if (tr.m >= 0 && ws.killed.has(tr.m)) {
       rt.a = -1;
       throw new Error(SKIP);
     }
