@@ -1,0 +1,6 @@
+{
+  "name": "fixture-runner-mocha-load-loop",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "mocha" }
+}

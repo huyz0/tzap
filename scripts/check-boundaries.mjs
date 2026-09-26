@@ -22,9 +22,10 @@ const RULES = {
   report: { allow: ['@tzap/model', 'mutation-testing-elements'] },
   discover: { allow: ['@tzap/model', 'tinyglobby', 'yaml'] },
   'runner-vitest': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime'] },
-  'runner-node': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime'] },
+  'runner-kit': { allow: ['@tzap/model', '@tzap/protocol'] },
+  'runner-node': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime', '@tzap/runner-kit'] },
   'runner-jest': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime'] },
-  'runner-mocha': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime'] },
+  'runner-mocha': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime', '@tzap/runner-kit'] },
   typecheck: { allow: ['@tzap/model', '@tzap/instrument', '@tzap/protocol'] },
 };
 

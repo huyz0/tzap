@@ -26,9 +26,10 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import * as nodeModule from 'node:module';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { FileOutcome, RunMode, RunRequest, RunResult, SessionOptions, TestOutcome, Try, TryOutcome } from '@tzap/protocol';
-import { beginTry, drainHits, endTry, install, type TzapRuntime } from '@tzap/runtime';
+import { pathToFileURL } from 'node:url';
+import { normPath as norm, type FileOutcome, type RunMode, type RunRequest, type RunResult, type SessionOptions, type TestOutcome, type Try, type TryOutcome } from '@tzap/protocol';
+import { firstMessage, InstrumentedModules, sameHits } from '@tzap/runner-kit';
+import { activateStatic, beginTry, drainHits, endTry, install, type TzapRuntime } from '@tzap/runtime';
 
 // --- the parts of Mocha the executor uses -----------------------------------------------------
 
@@ -98,35 +99,6 @@ interface MochaCli {
 }
 
 // --- helpers ------------------------------------------------------------------------------------
-
-export const norm = (p: string) => {
-  const s = p.replace(/\\/g, '/');
-  return process.platform === 'win32' ? s.toLowerCase() : s;
-};
-const cleanUrl = (u: string) => {
-  const q = u.search(/[?#]/);
-  return q === -1 ? u : u.slice(0, q);
-};
-const urlToNorm = (u: string) => {
-  try {
-    return norm(fileURLToPath(cleanUrl(u)));
-  } catch {
-    return undefined;
-  }
-};
-
-const ANSI = /\u001b\[[0-9;]*m/g;
-const firstMessage = (err: unknown): string | undefined => {
-  if (err === undefined || err === null) return undefined;
-  const m = (typeof err === 'object' && 'message' in err ? String((err as Error).message) : String(err)).replace(ANSI, '');
-  return m.length > 300 ? `${m.slice(0, 297)}...` : m;
-};
-
-function sameHits(a: Array<[number, number]>, b: Array<[number, number]>): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i]![0] !== b[i]![0] || a[i]![1] !== b[i]![1]) return false;
-  return true;
-}
 
 const list = (v: unknown): string[] =>
   v === undefined || v === null || v === false ? [] : (Array.isArray(v) ? v : [v]).flatMap((x) => String(x).split(/ *, */)).filter((x) => x !== '');
@@ -233,11 +205,7 @@ export class Executor {
   private readonly mochaDir: string;
   private readonly cli: MochaCli;
   private readonly options: Options;
-  private readonly instrumented = new Map<string, string>();
-  /** Sites per instrumented module (normalised path). */
-  private readonly sitesOf = new Map<string, number[]>();
-  /** Import edges seen by the resolve hook, normalised paths. */
-  private readonly edges = new Map<string, Set<string>>();
+  private readonly modules: InstrumentedModules;
   private mocha: MochaInstance | undefined;
   private globalContext: object | undefined;
   private tzapAfterEach: MochaHook | undefined;
@@ -252,14 +220,7 @@ export class Executor {
   constructor(private readonly o: ExecutorOptions) {
     this.pkgRoot = o.pkgRoot;
     this.rt = install();
-    const map = JSON.parse(readFileSync(o.session.instrumented, 'utf8')) as Record<string, { code: string; map: unknown }>;
-    for (const [file, v] of Object.entries(map)) {
-      const key = norm(path.resolve(file));
-      this.instrumented.set(key, v.code);
-      const sites = new Set<number>();
-      for (const m of v.code.matchAll(/__tzap\.c\[(\d+)\]/g)) sites.add(Number(m[1]));
-      this.sitesOf.set(key, [...sites]);
-    }
+    this.modules = new InstrumentedModules(o.session.instrumented);
     this.installHooks();
 
     // Mocha from the user's project, never one of tzap's own.
@@ -335,28 +296,10 @@ export class Executor {
     registerHooks({
       resolve: (specifier: string, context: Ctx, next: (s: string, c: Ctx) => Res): Res => {
         const r = next(specifier, context);
-        const parent = context.parentURL;
-        if (parent?.startsWith('file:') && r.url.startsWith('file:')) {
-          const p = urlToNorm(parent);
-          const c = urlToNorm(r.url);
-          if (p && c) {
-            let set = this.edges.get(p);
-            if (!set) this.edges.set(p, (set = new Set()));
-            set.add(c);
-          }
-        }
+        this.modules.recordEdge(context.parentURL, r.url);
         return r;
       },
-      load: (url: string, context: object, next: (u: string, c: object) => { format?: string; source?: unknown }) => {
-        const r = next(url, context);
-        if (!url.startsWith('file:')) return r;
-        const key = urlToNorm(url);
-        const code = key === undefined ? undefined : this.instrumented.get(key);
-        if (code === undefined) return r;
-        // For .ts files the format is module-typescript / commonjs-typescript and Node strips the
-        // (still TypeScript) instrumented source exactly as it would have stripped the original.
-        return { ...r, format: r.format ?? 'module', source: code, shortCircuit: true };
-      },
+      load: this.modules.load,
     });
   }
 
@@ -700,7 +643,7 @@ export class Executor {
     this.o.onProgress?.(st.req.id, info.id, tr.m, true);
     const reached = this.rt.n > 0;
     const { hung } = endTry(this.rt);
-    if (st.mode === 'static') this.rt.a = st.staticMutant;
+    if (st.mode === 'static') activateStatic(this.rt, st.staticMutant, st.req.staticLimit);
     let outcome: TryOutcome;
     if (copy.skipped) outcome = 'X';
     else if (hung) outcome = 'T';
@@ -748,11 +691,14 @@ export class Executor {
     const staticMutant = req.staticMutant ?? -1;
     endTry(this.rt);
     // Static: active before anything this run loads evaluates (in an isolated host, everything).
-    if (req.mode === 'static') this.rt.a = staticMutant;
+    // Static: active, with its loop limit, before anything this run loads evaluates (in an
+    // isolated host, everything).
+    if (req.mode === 'static') activateStatic(this.rt, staticMutant, req.staticLimit);
     this.collectLoad();
     const mocha = await this.ensureMocha();
     await this.load(mocha, files);
-    this.rt.a = req.mode === 'static' ? staticMutant : -1;
+    if (req.mode === 'static') activateStatic(this.rt, staticMutant, req.staticLimit);
+    else this.rt.a = -1;
 
     const st: RunState = {
       req,
@@ -867,36 +813,10 @@ export class Executor {
       const fo: FileOutcome = { file: f };
       const err = st.fileErrors.get(norm(f));
       if (err !== undefined) fo.error = err;
-      if (outside) fo.staticHits = this.staticHitsFor(f, outside);
+      if (outside) fo.staticHits = this.modules.staticHitsFor(f, outside);
       return fo;
     });
     return { id: st.req.id, tests, files: fileOutcomes, durationMs };
-  }
-
-  /**
-   * Hits outside any test (module evaluation, suite hooks) attributed to a test file. A module
-   * evaluates once per process, while the first file that imports it loads, so the hits are
-   * attributed to every test file whose import closure reaches the module: each of them would
-   * evaluate it on its own.
-   */
-  private staticHitsFor(file: string, outside: Map<number, number>): Array<[number, number]> {
-    if (outside.size === 0) return [];
-    const seen = new Set<string>();
-    const stack = [norm(file)];
-    while (stack.length) {
-      const m = stack.pop()!;
-      if (seen.has(m)) continue;
-      seen.add(m);
-      for (const c of this.edges.get(m) ?? []) stack.push(c);
-    }
-    const out: Array<[number, number]> = [];
-    for (const m of seen) {
-      for (const site of this.sitesOf.get(m) ?? []) {
-        const n = outside.get(site);
-        if (n !== undefined) out.push([site, n]);
-      }
-    }
-    return out.sort((a, b) => a[0] - b[0]);
   }
 
   /** Global teardown fixtures, once, as `mocha` runs them after its one run. */

@@ -12,6 +12,7 @@ const repo = path.resolve(here, '../../..');
 const sample = path.join(repo, 'fixtures/sample-mocha');
 const hazards = path.join(here, '../fixtures/hazards');
 const repeat = path.join(here, '../fixtures/repeat');
+const loadLoop = path.join(here, '../fixtures/load-loop');
 const mochaVersion = (JSON.parse(readFileSync(path.join(sample, 'node_modules/mocha/package.json'), 'utf8')) as { version: string }).version;
 
 interface Prepared {
@@ -350,6 +351,29 @@ describe('coverage repeats', () => {
         ['reaches a mutant once', 'pass', expect.stringMatching(/^fails when repeated/)],
         ['reaches no mutant once', 'pass', undefined],
       ]);
+    } finally {
+      await s.close();
+      rmSync(p.tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('static runs', () => {
+  it('hold the loop limit the engine measured while test files load', async () => {
+    const p = prepare(loadLoop, ['src/sum.ts']);
+    const file = path.join(loadLoop, 'test/sum.test.ts');
+    // A mutant that keeps the loop running: the limit, not the mutant, must stop it.
+    const m = p.mutants.find((x) => x.replacement === 's -= i')!;
+    const id = 'test/sum.test.ts::sums';
+    // Static runs are isolated, as the engine runs them: Mocha loads a test file once per host.
+    const s = createMochaSession({ root: loadLoop, pkg: pkgOf(loadLoop), instrumented: p.instrumented, tmpDir: p.tmp, isolate: true });
+    await s.start();
+    try {
+      // The file loops a thousand times while it loads: past a limit of 100, not past 1,000,000.
+      const tight = await s.run({ id: 1, mode: 'static', staticMutant: m.num, staticLimit: 100, files: [file], plan: { [id]: [tryOf(m)] } });
+      expect(tight.files.map((f) => f.error)).toEqual([expect.stringMatching(/declared hung/)]);
+      const loose = await s.run({ id: 2, mode: 'static', staticMutant: m.num, staticLimit: 1_000_000, files: [file], plan: { [id]: [tryOf(m)] } });
+      expect(loose.files.map((f) => f.error)).toEqual([undefined]);
     } finally {
       await s.close();
       rmSync(p.tmp, { recursive: true, force: true });

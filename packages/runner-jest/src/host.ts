@@ -136,6 +136,7 @@ async function run(req: RunRequest): Promise<RunResult> {
     mode: req.mode,
     plan: req.plan ?? {},
     staticMutant: req.staticMutant ?? -1,
+    ...(req.staticLimit !== undefined ? { staticLimit: req.staticLimit } : {}),
     jestMajor,
     killed: new Set(),
     rootDir,

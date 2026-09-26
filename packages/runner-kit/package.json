@@ -1,5 +1,5 @@
 {
-  "name": "@tzap/runner-mocha",
+  "name": "@tzap/runner-kit",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -19,14 +19,9 @@
   },
   "dependencies": {
     "@tzap/model": "workspace:*",
-    "@tzap/protocol": "workspace:*",
-    "@tzap/runner-kit": "workspace:*",
-    "@tzap/runtime": "workspace:*"
+    "@tzap/protocol": "workspace:*"
   },
   "devDependencies": {
-    "@tzap/core": "workspace:*",
-    "@tzap/instrument": "workspace:*",
-    "mocha": "12.0.2",
     "vitest": "5.0.2"
   }
 }

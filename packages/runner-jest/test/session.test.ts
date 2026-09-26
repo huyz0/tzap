@@ -284,6 +284,33 @@ describe.each(FIXTURES)('Jest $major', ({ name, major }) => {
     }, 60_000);
   });
 
+  describe('JestSession static runs', () => {
+    const dir = path.join(FIXTURE, `tzap-static-limit-${process.pid}`);
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    it('hold the loop limit the engine measured while test files load', async () => {
+      mkdirSync(path.join(dir, 'test'), { recursive: true });
+      // Under mutant 5 each call counts one hit: a thousand while the file loads.
+      writeFileSync(
+        path.join(dir, 'test/load.test.ts'),
+        `import { isFree } from '../../src/discount';\n` + `for (let i = 0; i < 1000; i++) isFree(i);\n` + `test('loads', () => { expect(isFree(0)).toBeDefined(); });\n`,
+      );
+      writeFileSync(path.join(dir, 'babel.config.cjs'), `module.exports = require('../babel.config.cjs');\n`);
+      const config = path.join(dir, 'jest.config.json');
+      writeFileSync(config, JSON.stringify({ rootDir: '.', testMatch: ['<rootDir>/test/**/*.test.ts'], testEnvironment: 'node' }));
+      const s = await open({
+        pkg: { id: name, root: '.', sources: ['src/**/*.ts'], runner: { kind: 'jest', config: slash(path.relative(FIXTURE, config)) } },
+      });
+      const file = slash(path.join(dir, 'test/load.test.ts'));
+      const id = 'test/load.test.ts::loads';
+      const tight = await s.run({ id: 1, mode: 'static', staticMutant: 5, staticLimit: 100, files: [file], plan: { [id]: [mut(5)] } });
+      expect(tight.files.map((f) => f.error)).toEqual([expect.stringMatching(/declared hung/)]);
+      const loose = await s.run({ id: 2, mode: 'static', staticMutant: 5, staticLimit: 1_000_000, files: [file], plan: { [id]: [mut(5)] } });
+      expect(loose.files.map((f) => f.error)).toEqual([undefined]);
+      await s.close();
+    }, 60_000);
+  });
+
   describe('JestSession coverage repeats', () => {
     const dir = path.join(FIXTURE, `tzap-repeat-${process.pid}`);
     afterEach(() => rmSync(dir, { recursive: true, force: true }));

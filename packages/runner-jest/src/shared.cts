@@ -11,6 +11,8 @@ export interface RunState {
   mode: RunMode;
   plan: Record<string, Try[]>;
   staticMutant: number;
+  /** Loop limit while the static mutant is active outside a try; the runtime's default when unset. */
+  staticLimit?: number;
   /** The project's Jest major version: 29 or 30. */
   jestMajor: number;
   /** Mutants killed so far in this run, across test files: their later tries are skipped. */

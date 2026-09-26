@@ -26,30 +26,16 @@
  *   file's own tests rather than around the whole run.
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { globSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { globSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import * as nodeModule from 'node:module';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { FileOutcome, RunMode, RunRequest, RunResult, SessionOptions, TestOutcome, Try, TryOutcome } from '@tzap/protocol';
+import { pathToFileURL } from 'node:url';
+import { normPath as norm, type FileOutcome, type RunMode, type RunRequest, type RunResult, type SessionOptions, type TestOutcome, type Try, type TryOutcome } from '@tzap/protocol';
+import { cleanUrl, firstMessage, InstrumentedModules, realPath, sameHits, urlToNorm } from '@tzap/runner-kit';
 import { activateStatic, beginTry, drainHits, endTry, install, type TzapRuntime } from '@tzap/runtime';
 
 const require = createRequire(import.meta.url);
-
-/**
- * The path Node's resolver reports for a file: symlinks resolved (macOS's /var is /private/var).
- * Lookups keyed by the paths tzap was given also take this form; what is reported keeps the form
- * it was given, since the engine relates it to the model root.
- */
-function realPath(p: string): string {
-  try {
-    // The JavaScript implementation, as Node's module resolver uses: it resolves symlinks but,
-    // unlike the native one, keeps Windows 8.3 short names (C:\Users\RUNNER~1) as they are.
-    return realpathSync(p);
-  } catch {
-    return p;
-  }
-}
 
 /** The subset of a node:test TestContext the executor reads. */
 interface Ctx {
@@ -72,22 +58,6 @@ interface NodeTest extends Register {
 }
 
 const real = require('node:test') as NodeTest;
-
-export const norm = (p: string) => {
-  const s = p.replace(/\\/g, '/');
-  return process.platform === 'win32' ? s.toLowerCase() : s;
-};
-const cleanUrl = (u: string) => {
-  const q = u.search(/[?#]/);
-  return q === -1 ? u : u.slice(0, q);
-};
-const urlToNorm = (u: string) => {
-  try {
-    return norm(fileURLToPath(cleanUrl(u)));
-  } catch {
-    return undefined;
-  }
-};
 
 /** node:test's default patterns (`--test` with no arguments), with type stripping's extensions. */
 const EXT = '{js,mjs,cjs,ts,mts,cts}';
@@ -210,26 +180,10 @@ export interface ExecutorOptions {
   onProgress?: (runId: number, test: string, mutant: number, done: boolean) => void;
 }
 
-const firstMessage = (err: unknown): string | undefined => {
-  if (err === undefined || err === null) return undefined;
-  const e = err as { code?: string; cause?: unknown; message?: string };
-  const inner = e.code === 'ERR_TEST_FAILURE' && e.cause !== undefined && e.cause !== null ? e.cause : e;
-  const m = (inner as { message?: string }).message ?? String(inner);
-  return m.length > 300 ? `${m.slice(0, 297)}...` : m;
-};
-
-function sameHits(a: Array<[number, number]>, b: Array<[number, number]>): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i]![0] !== b[i]![0] || a[i]![1] !== b[i]![1]) return false;
-  return true;
-}
-
 export class Executor {
   readonly rt: TzapRuntime;
   private readonly pkgRoot: string;
-  private readonly instrumented = new Map<string, string>();
-  /** Sites per instrumented module (normalised path). */
-  private readonly sitesOf = new Map<string, number[]>();
+  private readonly modules: InstrumentedModules;
   private readonly shimDir: string;
   private readonly shim: string;
   private readonly prelude: string;
@@ -240,8 +194,6 @@ export class Executor {
   private readonly shimDirUrls: string[];
   /** Modules (normalised path) re-evaluated every run: test files and whatever imports node:test. */
   private readonly reEval = new Set<string>();
-  /** Import edges seen by the resolve hook, normalised paths. */
-  private readonly edges = new Map<string, Set<string>>();
   private readonly als = new AsyncLocalStorage<string[]>();
   private readonly testTimeout: number;
   private runCount = 0;
@@ -253,15 +205,7 @@ export class Executor {
     this.pkgRoot = o.pkgRoot;
     this.testTimeout = o.testTimeout ?? DEFAULT_TEST_TIMEOUT;
     this.rt = install();
-    const map = JSON.parse(readFileSync(o.session.instrumented, 'utf8')) as Record<string, { code: string; map: unknown }>;
-    for (const [file, v] of Object.entries(map)) {
-      const sites = new Set<number>();
-      for (const m of v.code.matchAll(/__tzap\.c\[(\d+)\]/g)) sites.add(Number(m[1]));
-      for (const key of new Set([norm(path.resolve(file)), norm(realPath(path.resolve(file)))])) {
-        this.instrumented.set(key, v.code);
-        this.sitesOf.set(key, [...sites]);
-      }
-    }
+    this.modules = new InstrumentedModules(o.session.instrumented);
     this.allFiles = findTestFiles(this.pkgRoot, o.session.pkg.tests);
 
     this.shimDir = o.dir;
@@ -314,14 +258,7 @@ export class Executor {
         if (!child) return r;
         const st = this.state;
         if (st) {
-          if (parent?.startsWith('file:')) {
-            const p = urlToNorm(parent);
-            if (p) {
-              let set = this.edges.get(p);
-              if (!set) this.edges.set(p, (set = new Set()));
-              set.add(child);
-            }
-          }
+          this.modules.recordEdge(parent, r.url);
           const entry = st.files.get(child);
           if (entry !== undefined && (parent === undefined || parent.endsWith('/'))) {
             // run() importing the next test file: module evaluation of the previous one is over.
@@ -334,16 +271,7 @@ export class Executor {
         }
         return r;
       },
-      load: (url: string, context: object, next: (u: string, c: object) => { format?: string; source?: unknown }) => {
-        const r = next(url, context);
-        if (!url.startsWith('file:')) return r;
-        const key = urlToNorm(url);
-        const code = key === undefined ? undefined : this.instrumented.get(key);
-        if (code === undefined) return r;
-        // For .ts files the format is module-typescript / commonjs-typescript and Node strips the
-        // (still TypeScript) instrumented source exactly as it would have stripped the original.
-        return { ...r, format: r.format ?? 'module', source: code, shortCircuit: true };
-      },
+      load: this.modules.load,
     });
   }
 
@@ -671,7 +599,7 @@ export class Executor {
     const tr = info.tries![copy.index]!;
     const reached = this.rt.n > 0;
     const { hung } = endTry(this.rt);
-    if (st.mode === 'static') activateStatic(this.rt, st.staticMutant);
+    if (st.mode === 'static') activateStatic(this.rt, st.staticMutant, st.req.staticLimit);
     let outcome: TryOutcome;
     if (copy.skipped) outcome = 'X';
     else if (hung) outcome = 'T';
@@ -729,7 +657,7 @@ export class Executor {
 
     this.state = st;
     endTry(this.rt);
-    if (req.mode === 'static') activateStatic(this.rt, st.staticMutant);
+    if (req.mode === 'static') activateStatic(this.rt, st.staticMutant, req.staticLimit);
     drainHits(this.rt);
     try {
       await this.runNodeTest([this.prelude, ...files, this.sentinel]);
@@ -801,35 +729,9 @@ export class Executor {
       const fo: FileOutcome = { file: f };
       const err = st.fileErrors.get(norm(f));
       if (err !== undefined) fo.error = err;
-      if (st.mode === 'coverage') fo.staticHits = this.staticHitsFor(f, st.outside);
+      if (st.mode === 'coverage') fo.staticHits = this.modules.staticHitsFor(f, st.outside);
       return fo;
     });
     return { id: st.req.id, tests, files: fileOutcomes, durationMs };
-  }
-
-  /**
-   * Hits outside any test (module evaluation, suite hooks) attributed to a test file. With
-   * isolation 'none' a module evaluates once, while the first file that imports it loads, so
-   * the hits are attributed to every test file whose import closure reaches the module: each of
-   * them would evaluate it in a fresh process.
-   */
-  private staticHitsFor(file: string, outside: Map<number, number>): Array<[number, number]> {
-    if (outside.size === 0) return [];
-    const seen = new Set<string>();
-    const stack = [norm(realPath(file)), norm(file)];
-    while (stack.length) {
-      const m = stack.pop()!;
-      if (seen.has(m)) continue;
-      seen.add(m);
-      for (const c of this.edges.get(m) ?? []) stack.push(c);
-    }
-    const out: Array<[number, number]> = [];
-    for (const m of seen) {
-      for (const site of this.sitesOf.get(m) ?? []) {
-        const n = outside.get(site);
-        if (n !== undefined) out.push([site, n]);
-      }
-    }
-    return out.sort((a, b) => a[0] - b[0]);
   }
 }

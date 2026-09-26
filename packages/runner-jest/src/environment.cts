@@ -128,7 +128,7 @@ function extend(Base: Env): Env {
       // The runtime lives on the test VM's global, where instrumented code looks for it.
       this.rt = install(this.global as Record<string, unknown>);
       // Static: active before setupFiles and the test file evaluate anything.
-      if (this.tzapRun?.mode === 'static') runtime.activateStatic(this.rt, this.tzapRun.staticMutant);
+      if (this.tzapRun?.mode === 'static') runtime.activateStatic(this.rt, this.tzapRun.staticMutant, this.tzapRun.staticLimit);
     }
 
     async handleTestEvent(event: CircusEvent, state: CircusState): Promise<void> {
@@ -254,7 +254,7 @@ function extend(Base: Env): Env {
         if (tr) {
           const reached = this.rt.n > 0;
           const { hung } = endTry(this.rt);
-          if (run.mode === 'static') runtime.activateStatic(this.rt, run.staticMutant);
+          if (run.mode === 'static') runtime.activateStatic(this.rt, run.staticMutant, run.staticLimit);
           if (i === 0) rec.duration = performance.now() - rec.started;
           const msg = failed ? message(test.errors[0]) : undefined;
           let outcome: TryOutcome;
