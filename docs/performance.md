@@ -55,6 +55,40 @@ On the parity corpus the same changes took es-toolkit from 16.0 s to 6.6 s, supe
 32.8 s to 20.8 s and remeda from 88.9 s to 57.5 s — remeda had been slower than StrykerJS
 (74.3 s) and no longer is. The parity gate passes on the new build.
 
+### A third round: parallelism and native code
+
+Profiled on the bench fixture and on three corpus libraries; every experiment ran behind a
+switch, interleaved with the baseline, with verdicts compared mutant by mutant.
+
+Where the time goes, and what is idle:
+
+- **The CPUs are already busy where it matters.** Whole-machine utilisation, sampled every
+  100 ms on the bench fixture: coverage 54–64%, warm execution ~90%, isolated runs ~91% of 20
+  logical CPUs. Warm execution spends ~18 core-seconds on ~1,700 test executions — the tries
+  themselves are a fraction of that; the rest is Vitest loading each test file in a fresh
+  worker every round.
+- **tzap's own process is idle 85% of a run** (3.5 s of 4.1 s, `--cpu-prof`). Its 0.6 s of work
+  is mostly spawning runner processes (168 ms), loading its own bundle (60 ms) and file-system
+  calls; parsing and instrumenting are ~30 ms.
+
+| Experiment | Bench fixture | Real libraries | Verdicts | Kept |
+|---|---|---|---|---|
+| **Lanes sized to the work**: cores ÷ average files per isolated run (cap: half the cores, one lane per six runs) | 4 lanes as before, unchanged | es-toolkit 5.7 → 5.0 s, superjson 17.1 → 15.2 s, remeda 59.8 → 42.9 s | identical | **yes** |
+| One warm round instead of two (no "likeliest killer first") | 4.35 → 3.83 s | es-toolkit 6.2 → 9.3 s, remeda 64 → 100 s | identical | no: a fixture artifact |
+| Boot isolated sessions during warm execution | isolated −0.4 s, execute +0.4 s | — | identical | no: no idle CPU to overlap into |
+| Warm session without Vitest isolation | execute −35%, isolated 2.3x slower, erratic | — | identical here | no: slower, and breaks per-file `vi.mock` |
+| `vmThreads` pool for isolated runs | 4.3 → 5.0 s | — | identical | no |
+| oxc-parser raw transfer (AST read from native memory, not JSON) | parse 2.1x faster; 3 ms of a 4 s run | parse 2.3x on es-toolkit (188 → 83 ms per pass); identical ASTs on 1,565 files | — | not adopted: ≤ 2–3% of a run |
+
+The native question in one line: a native instrumenter could remove at most the instrument
+phase — 0.1 s of a 4 s bench run, a few hundred milliseconds on a large library — because the
+time is spent inside the test runner, not in tzap. oxc's raw transfer is the cheapest step in
+that direction if it is ever wanted.
+
+Isolated runs were where parallelism paid: each packs at most one mutant per test file, so on
+a library with few test files (superjson: 115 mutants in 109 runs of one to four files) a run
+keeps only a few workers busy, and four lanes left most of the machine idle.
+
 S2 (Jest), S7 (monorepo) and S8 (frontend) are declared and skipped: the generator emits one
 Vitest package. The Jest runner and the frontend fixtures exist; the benchmark variants do not.
 

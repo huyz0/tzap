@@ -851,11 +851,18 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       }
 
       const cores = os.availableParallelism();
-      // Another session costs a runner boot; it pays only when there is enough isolated work to
-      // spread over it. The first lane reuses the warm session when that already isolates files.
+      // The first lane reuses the warm session when that already isolates files.
+      // A run keeps about one worker busy per test file it holds, so the lanes that fill the
+      // machine are the cores over the average files per run: few when runs are wide, more when
+      // each run holds a file or two. Another lane costs a runner boot, so there is one only for
+      // every six runs, and never more than half the cores.
+      const autoLanes = () => {
+        const avgFiles = jobs.reduce((a, j) => a + j.assign.size, 0) / Math.max(1, jobs.length);
+        return Math.max(1, Math.min(Math.round(cores / Math.max(1, avgFiles)), Math.floor(cores / 2), Math.ceil(jobs.length / 6)));
+      };
       const lanes = fresh
         ? Math.max(1, options.concurrency ?? 1)
-        : Math.max(1, options.concurrency ?? Math.min(4, Math.floor(cores / 4), Math.ceil(jobs.length / 6)));
+        : Math.max(1, options.concurrency ?? autoLanes());
       const workersPerSession = Math.max(1, Math.floor(cores / lanes));
 
       const runJob = async (job: Job, session: () => Promise<RunnerSession>, retire: () => void): Promise<void> => {
