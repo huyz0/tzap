@@ -29,7 +29,7 @@ import * as nodeModule from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { FileOutcome, RunMode, RunRequest, RunResult, SessionOptions, TestOutcome, Try, TryOutcome } from '@tzap/protocol';
-import { beginTry, drainHits, endTry, install, type TzapRuntime } from '@tzap/runtime';
+import { activateStatic, beginTry, drainHits, endTry, install, type TzapRuntime } from '@tzap/runtime';
 
 const require = createRequire(import.meta.url);
 
@@ -554,7 +554,7 @@ export class Executor {
     const tr = info.tries![copy.index]!;
     const reached = this.rt.n > 0;
     const { hung } = endTry(this.rt);
-    if (st.mode === 'static') this.rt.a = st.staticMutant;
+    if (st.mode === 'static') activateStatic(this.rt, st.staticMutant);
     let outcome: TryOutcome;
     if (copy.skipped) outcome = 'X';
     else if (hung) outcome = 'T';
@@ -609,7 +609,7 @@ export class Executor {
 
     this.state = st;
     endTry(this.rt);
-    if (req.mode === 'static') this.rt.a = st.staticMutant;
+    if (req.mode === 'static') activateStatic(this.rt, st.staticMutant);
     drainHits(this.rt);
     try {
       await this.runNodeTest([this.prelude, ...files, this.sentinel]);

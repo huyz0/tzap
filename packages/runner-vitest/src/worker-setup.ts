@@ -9,15 +9,17 @@
  * `beforeEach` activates the repetition's mutant; `afterEach`, registered first and so run last,
  * records the outcome in `task.meta` and clears the failure so the next repetition starts clean.
  */
-import { beginTry, drainHits, endTry, install, type TzapRuntime } from '@tzap/runtime';
+import { activateStatic, beginTry, drainHits, endTry, install, type TzapRuntime } from '@tzap/runtime';
 import { threadId } from 'node:worker_threads';
-import { PROGRESS_DIR_ENV, progressWriter, type RunMode, type Try, type TryOutcome } from '@tzap/protocol';
+import { normPath, PROGRESS_DIR_ENV, progressWriter, type RunMode, type Try, type TryOutcome } from '@tzap/protocol';
 
 interface Payload {
   runId: number;
   mode: RunMode;
   plan?: Record<string, Try[]>;
   staticMutant?: number;
+  staticPlan?: Record<string, number>;
+  staticLimit?: number;
 }
 
 interface Task {
@@ -87,10 +89,11 @@ export function setup(vitest: Vitest): void {
 
   // mutate and static
   const plan = payload.plan ?? {};
-  if (payload.mode === 'static') {
-    // Active before the test file imports anything: this setup file runs first.
-    rt.a = payload.staticMutant ?? -1;
-  }
+  // Static mode: active before the test file imports anything, since this setup file runs first.
+  // With a per-file plan, each test file (each with its own module graph) gets its own mutant.
+  const currentFile = (globalThis as { __vitest_worker__?: { filepath?: string } }).__vitest_worker__?.filepath;
+  const staticMutant = payload.staticPlan && currentFile ? (payload.staticPlan[normPath(currentFile)] ?? -1) : (payload.staticMutant ?? -1);
+  if (payload.mode === 'static') activateStatic(rt, staticMutant, payload.staticLimit);
 
   // Vitest parses hook sources: the first parameter must be a destructuring pattern.
   vitest.beforeAll(({}, file) => {
@@ -122,7 +125,7 @@ export function setup(vitest: Vitest): void {
       throw new Error(SKIP);
     }
     ws.progress?.(payload.runId, task.id, tr.m, false);
-    beginTry(rt, payload.mode === 'static' ? (payload.staticMutant ?? -1) : tr.m, tr.N, tr.L);
+    beginTry(rt, payload.mode === 'static' ? staticMutant : tr.m, tr.N, tr.L);
   });
 
   vitest.afterEach(({ task }) => {
@@ -133,7 +136,7 @@ export function setup(vitest: Vitest): void {
     ws.progress?.(payload.runId, task.id, tr.m, true);
     const reached = rt.n > 0;
     const { hung } = endTry(rt);
-    if (payload.mode === 'static') rt.a = payload.staticMutant ?? -1;
+    if (payload.mode === 'static') activateStatic(rt, staticMutant, payload.staticLimit);
     const failed = task.result?.state === 'fail';
     const message = failed ? firstMessage(task) : undefined;
     let outcome: TryOutcome;
@@ -160,8 +163,11 @@ export function setup(vitest: Vitest): void {
  */
 function setupCoverage(vitest: Vitest, rt: TzapRuntime): void {
   const outside = new Map<number, number>();
+  let outsideLoops = 0;
   const collectOutside = () => {
     for (const [site, n] of drainHits(rt)) outside.set(site, (outside.get(site) ?? 0) + n);
+    outsideLoops += rt.l;
+    rt.l = 0;
   };
   // Vitest parses hook sources: the first parameter must be a destructuring pattern.
   vitest.beforeAll(({}, file) => {
@@ -203,6 +209,8 @@ function setupCoverage(vitest: Vitest, rt: TzapRuntime): void {
   vitest.afterAll(({}, file) => {
     collectOutside();
     file.meta.tzapStatic = [...outside];
+    file.meta.tzapLoadLoops = outsideLoops;
     outside.clear();
+    outsideLoops = 0;
   });
 }

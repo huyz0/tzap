@@ -8,3 +8,7 @@ export function label(n: number): string {
 
 // Called at load and inside tests: a hybrid mutant.
 export const FIRST = label(1);
+
+export function slug(s: string): string {
+  return s.trim().toLowerCase();
+}

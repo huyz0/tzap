@@ -13,7 +13,7 @@ import {
   type TestInfo,
 } from '@tzap/model';
 import { instrument, type LineRange, type MutantFilter } from '@tzap/instrument';
-import type { RunnerFactory, RunnerSession, RunResult, Try } from '@tzap/protocol';
+import { normPath, type RunnerFactory, type RunnerSession, type RunResult, type Try } from '@tzap/protocol';
 import { createHash } from 'node:crypto';
 import { relativeTo, sourceFiles, toPosix } from './files.js';
 import { ImportGraph } from './graph.js';
@@ -247,15 +247,16 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
   // --- sessions and coverage ---------------------------------------------------------------
   timer.start('coverage');
   emit({ type: 'phase', phase: 'coverage' });
-  const sessionFor = (pkg: PackageModel, isolate?: boolean): RunnerSession => {
+  const sessionFor = (pkg: PackageModel, isolate?: boolean, workers = options.workers): RunnerSession => {
     const factory = options.runners[pkg.runner!.kind];
     if (!factory) throw new Error(`no runner adapter for "${pkg.runner!.kind}" (package ${pkg.id})`);
-    return factory({ root, pkg, instrumented: instrumentedPath, isolate, workers: options.workers, tmpDir });
+    return factory({ root, pkg, instrumented: instrumentedPath, isolate, workers, tmpDir });
   };
 
   let runId = 1;
   const warm = new Map<string, RunnerSession>();
   const isolatesFiles = new Set<string>();
+  const staticPerFile = new Set<string>();
   const graph = new ImportGraph({
     workspacePackages: new Map(model.packages.map((p) => [p.id, path.resolve(root, p.root)])),
   });
@@ -270,12 +271,14 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
   };
   const tests = new Map<string, TestRecord>();
   const staticSites = new Map<number, Set<string>>(); // site -> test files (absolute) that reached it outside tests
+  const loadLoops = new Map<string, number>(); // normPath'd test file -> loop back-edges while loading
   const allTestFiles = new Map<string, Set<string>>(); // pkg id -> test files
   try {
     for (const pkg of runnerPackages) {
       const s = sessionFor(pkg);
       const info = await s.start();
       if (info.isolatesFiles) isolatesFiles.add(pkg.id);
+      if (info.staticPerFile) staticPerFile.add(pkg.id);
       warm.set(pkg.id, s);
       let files: string[] | undefined;
       if (options.lines && s.listFiles) {
@@ -293,6 +296,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
           set.add(`${pkg.id}\0${f.file}`);
         }
         if (f.error) emit({ type: 'warning', message: `${relativeTo(root, f.file)}: ${f.error}` });
+        if (f.loadLoops !== undefined) loadLoops.set(normPath(f.file), f.loadLoops);
       }
       allTestFiles.set(pkg.id, filesOfPkg);
       for (const t of res.tests) {
@@ -385,6 +389,11 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         results.set(d.num, { ...reused, ...d, status: reused.status, cached: true });
         continue;
       }
+      // Reached while modules load, whether or not tests reach it too: only a run with the mutant
+      // active from the start can decide it. A warm run would activate it inside tests only, and a
+      // test that compares against a value computed at load time (`const expected = f(x)` at the
+      // top of the file) would then see two different programs where the mutated program has one:
+      // a false kill. The hazards fixture holds that case.
       if (isStatic) {
         statics.push(d);
         continue;
@@ -483,8 +492,8 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
           const res = await runWithRecovery(pkgId, Object.fromEntries(plan), silenceMs);
           collect(pkgId, res, outcomes, suspect);
           // A planned try the runner never reported on decided nothing: re-decide it in isolation.
-          const reported = new Set(res.tests.flatMap((t) => (t.tries ?? []).map(([m]) => `${t.id} ${m}`)));
-          for (const [id, list] of plan) for (const tr of list) if (tr.m >= 0 && !reported.has(`${id} ${tr.m}`)) suspect.add(tr.m);
+          const reported = new Set(res.tests.flatMap((t) => (t.tries ?? []).map(([m]) => `${t.id}\0${m}`)));
+          for (const [id, list] of plan) for (const tr of list) if (tr.m >= 0 && !reported.has(`${id}\0${tr.m}`)) suspect.add(tr.m);
         }
         for (const p of active) {
           const o = outcomes.get(p.d.num);
@@ -587,106 +596,223 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
     /**
      * Each mutant is active before any module evaluates, in a session that isolates test files,
      * and every green test of every file that could reach it runs, in the file's own order, so
-     * no test is deprived of the tests it follows. Killed when any of them fails. With `fresh`,
-     * each mutant gets a new session: the reference engine, which reuses nothing.
+     * no test is deprived of the tests it follows. Killed when any of them fails.
+     *
+     * With `fresh` (the reference engine) each mutant gets a session of its own and nothing is
+     * shared. Otherwise mutants are packed: every test file has its own module graph, so one run
+     * can activate a different mutant in each file, and mutants whose files do not overlap share a
+     * run. Runs go out to several sessions at once.
      */
     async function isolatedRuns(list: Array<{ d: MutantDescriptor; tests: string[] }>, fresh: boolean): Promise<void> {
       if (list.length === 0) return;
-      const shared = new Map<string, RunnerSession>();
-      const concurrency = fresh ? Math.max(1, options.concurrency ?? 1) : 1;
-      let next = 0;
-      const one = async (item: { d: MutantDescriptor; tests: string[] }) => {
-        const { d } = item;
-        const isStatic = staticSites.has(d.site);
-        const perPkg = new Map<string, Set<string>>();
-        const add = (pkgId: string, file: string) => {
-          let set = perPkg.get(pkgId);
-          if (!set) perPkg.set(pkgId, (set = new Set()));
-          set.add(toPosix(file).toLowerCase());
-        };
-        for (const key of item.tests) {
-          const t = tests.get(key)!;
-          add(t.pkg, path.resolve(root, t.file));
-        }
-        for (const t of siteTests.get(d.site) ?? []) add(t.pkg, path.resolve(root, t.file));
-        if (isStatic) {
-          for (const key of staticSites.get(d.site)!) {
-            const [pkgId, file] = key.split('\0') as [string, string];
-            add(pkgId, file);
-          }
-        }
-        let killedBy: string | undefined;
-        let message: string | undefined;
-        let timeout = false;
-        let tested = 0;
-        const coveredBy = new Set<string>(item.tests);
-        for (const t of siteTests.get(d.site) ?? []) coveredBy.add(t.key);
-        for (const [pkgId, fileSet] of perPkg) {
-          if (killedBy) break;
-          const pkg = runnerPackages.find((p) => p.id === pkgId)!;
-          const plan: Record<string, Try[]> = {};
-          const fileList: string[] = [];
-          for (const t of green) {
-            if (t.pkg !== pkgId) continue;
-            const abs = path.resolve(root, t.file);
-            if (!fileSet.has(toPosix(abs).toLowerCase())) continue;
-            plan[t.runnerId] = [{ m: d.num, ...limitsFor(t, d.site) }];
-            if (!fileList.includes(abs)) fileList.push(abs);
-          }
-          if (fileList.length === 0) continue;
-          let s = fresh ? undefined : isolatesFiles.has(pkgId) ? warm.get(pkgId) : shared.get(pkgId);
-          if (!s) {
-            s = sessionFor(pkg, true);
-            await s.start();
-            if (!fresh) shared.set(pkgId, s);
-          }
-          try {
-            const budget = 15_000 + Object.keys(plan).reduce((a, id) => a + 5 * (tests.get(`${pkgId}::${id}`)?.duration ?? 0) + 50, 0);
-            const res = await s.run({ id: runId++, mode: 'static', staticMutant: d.num, plan, files: fileList, budgetMs: Math.max(budget, silenceMs) });
-            if (res.timedOut) {
-              timeout = true;
-              killedBy = 'wall-clock backstop';
-              message = 'wall-clock backstop';
-              shared.delete(pkgId);
-              continue;
-            }
-            for (const f of res.files) {
-              if (f.error && !killedBy) {
-                killedBy = `${pkgId}::${relativeTo(root, f.file)}`;
-                message = `test file failed to load: ${f.error}`;
-              }
-            }
-            for (const t of res.tests) {
-              for (const [, outcome, msg] of t.tries ?? []) {
-                tested++;
-                if ((outcome === 'K' || outcome === 'T') && !killedBy) {
-                  killedBy = `${pkgId}::${t.id}`;
-                  timeout = outcome === 'T';
-                  message = msg;
-                }
-              }
-            }
-          } finally {
-            if (fresh) await s.close();
-          }
-        }
-        const base: MutantResult = { ...d, status: 'Survived', coveredBy: [...coveredBy].sort(), testsCompleted: tested, ...(isStatic ? { static: true } : {}) };
-        if (timeout) results.set(d.num, { ...base, status: 'Timeout', statusReason: message ?? 'declared hung', killedBy: killedBy ? [killedBy] : [] });
-        else if (killedBy) results.set(d.num, { ...base, status: 'Killed', statusReason: message, killedBy: [killedBy] });
-        else if (coveredBy.size === 0 && !isStatic) results.set(d.num, { ...base, status: 'NoCoverage' });
-        else results.set(d.num, base);
-        emit({ type: 'progress', decided: decidedCount(), total });
-      };
-      try {
-        const sorted = list.slice().sort((a, b) => a.d.num - b.d.num);
-        await Promise.all(
-          Array.from({ length: concurrency }, async () => {
-            while (next < sorted.length) await one(sorted[next++]!);
-          }),
-        );
-      } finally {
-        await Promise.all([...shared.values()].map((s) => s.close()));
+      interface Item {
+        d: MutantDescriptor;
+        isStatic: boolean;
+        files: Map<string, Set<string>>; // package id -> normPath'd test files
+        coveredBy: Set<string>;
+        killedBy?: string;
+        message?: string;
+        timeout: boolean;
+        tested: number;
+        /** Tests a run was asked to try this mutant against. */
+        planned: number;
       }
+      const items: Item[] = list
+        .slice()
+        .sort((a, b) => a.d.num - b.d.num)
+        .map(({ d, tests: keys }) => {
+          const isStatic = staticSites.has(d.site);
+          const files = new Map<string, Set<string>>();
+          const add = (pkgId: string, file: string) => {
+            let set = files.get(pkgId);
+            if (!set) files.set(pkgId, (set = new Set()));
+            set.add(normPath(file));
+          };
+          for (const key of keys) {
+            const t = tests.get(key)!;
+            add(t.pkg, path.resolve(root, t.file));
+          }
+          for (const t of siteTests.get(d.site) ?? []) add(t.pkg, path.resolve(root, t.file));
+          if (isStatic) {
+            for (const key of staticSites.get(d.site)!) {
+              const [pkgId, file] = key.split('\0') as [string, string];
+              add(pkgId, file);
+            }
+          }
+          const coveredBy = new Set<string>(keys);
+          for (const t of siteTests.get(d.site) ?? []) coveredBy.add(t.key);
+          return { d, isStatic, files, coveredBy, timeout: false, tested: 0, planned: 0 };
+        });
+
+      // Green tests by package and normalised file, in discovery order.
+      const testsByFile = new Map<string, TestRecord[]>();
+      for (const t of green) {
+        const k = `${t.pkg}\0${normPath(path.resolve(root, t.file))}`;
+        let l = testsByFile.get(k);
+        if (!l) testsByFile.set(k, (l = []));
+        l.push(t);
+      }
+
+      // Jobs: one run of one package, assigning each of its test files at most one mutant.
+      interface Job {
+        pkgId: string;
+        assign: Map<string, Item>;
+      }
+      const jobs: Job[] = [];
+      for (const pkg of runnerPackages) {
+        const parts = items.filter((it) => (it.files.get(pkg.id)?.size ?? 0) > 0);
+        const packs = !fresh && staticPerFile.has(pkg.id);
+        const open: Job[] = [];
+        for (const it of parts) {
+          const fs = it.files.get(pkg.id)!;
+          let job = packs ? open.find((j) => ![...fs].some((f) => j.assign.has(f))) : undefined;
+          if (!job) {
+            job = { pkgId: pkg.id, assign: new Map() };
+            open.push(job);
+          }
+          for (const f of fs) job.assign.set(f, it);
+        }
+        jobs.push(...open);
+      }
+
+      const cores = os.availableParallelism();
+      const lanes = fresh ? Math.max(1, options.concurrency ?? 1) : Math.max(1, options.concurrency ?? Math.min(4, Math.floor(cores / 4)));
+      const workersPerSession = Math.max(1, Math.floor(cores / lanes));
+
+      const runJob = async (job: Job, session: () => Promise<RunnerSession>, retire: () => void): Promise<void> => {
+        // A mutant killed by an earlier job needs no more runs.
+        for (const [f, it] of [...job.assign]) if (it.killedBy) job.assign.delete(f);
+        if (job.assign.size === 0) return;
+        const plan: Record<string, Try[]> = {};
+        const staticPlan: Record<string, number> = {};
+        const files: string[] = [];
+        for (const [f, it] of job.assign) {
+          const ts = testsByFile.get(`${job.pkgId}\0${f}`) ?? [];
+          if (ts.length === 0) continue;
+          staticPlan[f] = it.d.num;
+          files.push(path.resolve(root, ts[0]!.file));
+          for (const t of ts) plan[t.runnerId] = [{ m: it.d.num, ...limitsFor(t, it.d.site) }];
+          it.planned += ts.length;
+        }
+        if (files.length === 0) return;
+        const byNum = new Map([...job.assign.values()].map((it) => [it.d.num, it]));
+        const single = byNum.size === 1 ? [...byNum.keys()][0] : undefined;
+        const s = await session();
+        const res = await s.run({
+          id: runId++,
+          mode: 'static',
+          plan,
+          files,
+          ...(staticPerFile.has(job.pkgId) ? { staticPlan } : {}),
+          ...(single !== undefined ? { staticMutant: single } : {}),
+          // Ten times what the unmutated files needed while loading, with a floor.
+          staticLimit: Math.max(1_000_000, 10 * Math.max(0, ...Object.keys(staticPlan).map((f) => loadLoops.get(f) ?? 0))),
+          budgetMs: silenceMs,
+        });
+        if (res.timedOut) {
+          retire();
+          const hung = new Set((res.inFlight ?? []).map((x) => x.mutant));
+          if (hung.size === 0 && byNum.size > 1) {
+            // Stuck before any try began — a mutant looping while a module loads — in a run shared
+            // by several mutants: nothing says which. Decide each on its own.
+            for (const it of byNum.values()) {
+              const files = new Map([...job.assign].filter(([, x]) => x === it));
+              await runJob({ pkgId: job.pkgId, assign: files }, session, retire);
+            }
+            return;
+          }
+          for (const it of byNum.values()) {
+            if (hung.has(it.d.num) || byNum.size === 1) {
+              it.timeout = true;
+              it.killedBy = 'wall-clock backstop';
+              it.message = 'wall-clock backstop';
+            }
+          }
+          // The rest of the job is decided again, without the hung mutants.
+          const rest: Job = { pkgId: job.pkgId, assign: new Map([...job.assign].filter(([, it]) => !it.killedBy)) };
+          if (rest.assign.size > 0 && rest.assign.size < job.assign.size) await runJob(rest, session, retire);
+          return;
+        }
+        const fileMutant = new Map(Object.entries(staticPlan));
+        for (const f of res.files) {
+          if (!f.error) continue;
+          const it = byNum.get(fileMutant.get(normPath(f.file)) ?? single ?? -1);
+          if (it && !it.killedBy) {
+            it.killedBy = `${job.pkgId}::${relativeTo(root, f.file)}`;
+            it.message = `test file failed to load: ${f.error}`;
+            // The loop guard stopped a mutant that never finished loading the module.
+            if (/declared hung/.test(f.error)) it.timeout = true;
+          }
+        }
+        for (const t of res.tests) {
+          for (const [m, outcome, msg] of t.tries ?? []) {
+            const it = byNum.get(m);
+            if (!it) continue;
+            it.tested++;
+            if ((outcome === 'K' || outcome === 'T') && !it.killedBy) {
+              it.killedBy = `${job.pkgId}::${t.id}`;
+              it.timeout = outcome === 'T';
+              it.message = msg;
+            }
+          }
+        }
+        for (const it of byNum.values()) emit({ type: 'progress', decided: decidedCount() + (it.killedBy ? 1 : 0), total });
+      };
+
+      const pkgById = new Map(runnerPackages.map((p) => [p.id, p]));
+      const queue = jobs.slice();
+      const lane = async () => {
+        const sessions = new Map<string, RunnerSession>();
+        try {
+          for (;;) {
+            const job = queue.shift();
+            if (!job) return;
+            const pkg = pkgById.get(job.pkgId)!;
+            const reuseWarm = !fresh && isolatesFiles.has(job.pkgId) && lanes === 1;
+            const session = async () => {
+              if (reuseWarm) {
+                let w = warm.get(job.pkgId);
+                if (!w) {
+                  w = sessionFor(pkg);
+                  await w.start();
+                  warm.set(job.pkgId, w);
+                }
+                return w;
+              }
+              let s = sessions.get(job.pkgId);
+              if (!s) {
+                s = sessionFor(pkg, true, workersPerSession);
+                await s.start();
+                sessions.set(job.pkgId, s);
+              }
+              return s;
+            };
+            const retire = () => {
+              if (reuseWarm) warm.delete(job.pkgId);
+              sessions.delete(job.pkgId);
+            };
+            await runJob(job, session, retire);
+            if (fresh) {
+              await Promise.all([...sessions.values()].map((s) => s.close()));
+              sessions.clear();
+            }
+          }
+        } finally {
+          await Promise.all([...sessions.values()].map((s) => s.close()));
+        }
+      };
+      await Promise.all(Array.from({ length: lanes }, lane));
+
+      for (const it of items) {
+        const base: MutantResult = { ...it.d, status: 'Survived', coveredBy: [...it.coveredBy].sort(), testsCompleted: it.tested, ...(it.isStatic ? { static: true } : {}) };
+        if (it.timeout) results.set(it.d.num, { ...base, status: 'Timeout', statusReason: it.message ?? 'declared hung', killedBy: it.killedBy ? [it.killedBy] : [] });
+        else if (it.killedBy) results.set(it.d.num, { ...base, status: 'Killed', statusReason: it.message, killedBy: [it.killedBy] });
+        else if (it.planned === 0) results.set(it.d.num, { ...base, status: 'NoCoverage', statusReason: 'no passing test reaches it' });
+        // Asked to run and never reported: nothing decided this mutant. Never call that a survival.
+        else if (it.tested === 0) results.set(it.d.num, { ...base, status: 'RuntimeError', statusReason: 'the mutant was planned against tests that never reported a result' });
+        else results.set(it.d.num, base);
+      }
+      emit({ type: 'progress', decided: decidedCount(), total });
     }
   } finally {
     await Promise.all([...warm.values()].map((s) => s.close()));

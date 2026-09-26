@@ -69,6 +69,23 @@ export function runtimeHeader(maxSite: number): string {
   return `var ${RUNTIME_GLOBAL}=globalThis.${RUNTIME_GLOBAL}||(globalThis.${RUNTIME_GLOBAL}=(${RUNTIME_FACTORY_SOURCE.replace(/\n/g, '')})());${RUNTIME_GLOBAL}.g(${maxSite});`;
 }
 
+/**
+ * The default limit while a static mutant is active outside any test — while modules load, in
+ * beforeAll/afterAll hooks, in describe callbacks. Engines pass a measured one instead (ten times
+ * the loop iterations the unmutated files needed while loading); this is the fallback.
+ */
+export const STATIC_LIMIT = 10_000_000;
+
+/** Activates a static mutant for everything that runs until the next try begins. */
+export function activateStatic(rt: TzapRuntime, mutant: number, limit: number = STATIC_LIMIT): void {
+  rt.a = mutant;
+  rt.n = 0;
+  rt.N = limit;
+  rt.l = 0;
+  rt.L = limit;
+  rt.h = 0;
+}
+
 /** Resets per-try state before a test runs. */
 export function beginTry(rt: TzapRuntime, mutant: number, hitLimit: number, loopLimit: number): void {
   rt.a = mutant;

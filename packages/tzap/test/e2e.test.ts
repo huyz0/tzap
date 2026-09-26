@@ -169,8 +169,8 @@ describe('diff scoping', () => {
     const lines = new Map([['fixtures/hazards-vitest/src/math.ts', [[1, 11]] as const]]);
     const events: string[] = [];
     const narrowed = await run(m, { lines, onEvent: (e) => e.type === 'narrowed' && events.push(`${e.files}/${e.of}`) });
-    // math.ts is imported by two of the six test files.
-    expect(events).toEqual(['2/6']);
+    // math.ts is imported by two of the seven test files.
+    expect(events).toEqual(['2/7']);
     const inScope = Object.fromEntries(Object.entries(verdicts(full)).filter(([k]) => k.includes('/math.ts:')));
     expect(verdicts(narrowed)).toEqual(inScope);
   }, 240_000);

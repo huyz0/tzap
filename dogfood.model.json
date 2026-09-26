@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "root": ".",
+  "packages": [
+    {
+      "id": "tzap-self",
+      "root": ".",
+      "sources": ["packages/{model,instrument,report}/src/**/*.ts"],
+      "runner": { "kind": "vitest", "config": "vitest.dogfood.config.ts" }
+    }
+  ]
+}

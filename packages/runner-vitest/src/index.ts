@@ -11,13 +11,13 @@ export class VitestSession implements RunnerSession {
   private child: ChildProcess | undefined;
   private pending: { resolve: (r: RunResult) => void; reject: (e: Error) => void; id: number } | undefined;
   private readonly inFlight = new Map<string, number>();
-  private starting: { resolve: (v: { runnerVersion: string }) => void; reject: (e: Error) => void } | undefined;
+  private starting: { resolve: (v: { runnerVersion: string; staticPerFile?: boolean }) => void; reject: (e: Error) => void } | undefined;
   private stderr = '';
   private listing: ((files: string[]) => void) | undefined;
 
   constructor(private readonly options: SessionOptions) {}
 
-  start(): Promise<{ runnerVersion: string }> {
+  start(): Promise<{ runnerVersion: string; staticPerFile?: boolean }> {
     const hostPath = path.join(import.meta.dirname, 'host.js');
     const child = fork(hostPath, [], {
       stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
@@ -54,7 +54,9 @@ export class VitestSession implements RunnerSession {
   private onMessage(m: HostResponse): void {
     switch (m.type) {
       case 'ready':
-        this.starting?.resolve({ runnerVersion: m.runnerVersion });
+        // The setup file knows which test file it runs for, so an isolated run can activate a
+        // different static mutant in each file.
+        this.starting?.resolve({ runnerVersion: m.runnerVersion, staticPerFile: true });
         this.starting = undefined;
         break;
       case 'files':

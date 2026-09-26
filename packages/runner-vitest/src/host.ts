@@ -215,7 +215,7 @@ function toArray(v: unknown): Array<[number, number]> | undefined {
 async function run(req: RunRequest): Promise<RunResult> {
   const v = vitest!;
   const started = performance.now();
-  v.provide('tzap', { runId: req.id, mode: req.mode, plan: req.plan, staticMutant: req.staticMutant });
+  v.provide('tzap', { runId: req.id, mode: req.mode, plan: req.plan, staticMutant: req.staticMutant, staticPlan: req.staticPlan, staticLimit: req.staticLimit });
   let specs = await v.globTestSpecifications();
   if (req.files) {
     const wanted = new Set(req.files.map(norm));
@@ -235,6 +235,7 @@ async function run(req: RunRequest): Promise<RunResult> {
       if (errs.length > 0) fo.error = errs[0]?.message ?? 'test file failed';
       const sh = toArray(meta.tzapStatic);
       if (sh) fo.staticHits = sh;
+      if (typeof meta.tzapLoadLoops === 'number') fo.loadLoops = meta.tzapLoadLoops;
       files.push(fo);
       for (const t of mod.children.allTests()) {
         const r = t.result();

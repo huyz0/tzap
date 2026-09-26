@@ -31,6 +31,13 @@ export interface RunRequest {
   plan?: Record<string, Try[]>;
   /** `static`: the mutant active for the whole run. */
   staticMutant?: number;
+  /**
+   * `static`, for runners that isolate every test file: a different mutant per test file, keyed by
+   * `normPath` of the file, so one run decides several static mutants.
+   */
+  staticPlan?: Record<string, number>;
+  /** `static`: loop and hit limit outside any test, measured from the unmutated files' loading. */
+  staticLimit?: number;
   /** Wall-clock budget for the whole run, after which the session is killed. */
   budgetMs?: number;
 }
@@ -72,6 +79,8 @@ export interface FileOutcome {
   error?: string;
   /** `coverage`: sites reached outside any test while this file ran (module evaluation, hooks). */
   staticHits?: Array<[number, number]>;
+  /** `coverage`: loop back-edges taken outside any test while this file ran (loading, hooks). */
+  loadLoops?: number;
 }
 
 export interface RunResult {
@@ -104,7 +113,7 @@ export interface RunnerSession {
    * `isolatesFiles`: every test file gets fresh module state on every run (Jest does), so a
    * static mutant can run in this same session rather than in a separately isolated one.
    */
-  start(): Promise<{ runnerVersion: string; isolatesFiles?: boolean }>;
+  start(): Promise<{ runnerVersion: string; isolatesFiles?: boolean; staticPerFile?: boolean }>;
   /** Absolute paths of every test file the runner would run. Optional: without it, a diff run cannot narrow its coverage phase. */
   listFiles?(): Promise<string[]>;
   run(request: RunRequest): Promise<RunResult>;
@@ -137,6 +146,12 @@ export const PROGRESS_CHANNEL = 'tzap-progress';
 // So every worker overwrites a one-line file as each try starts and ends, and the engine side
 // reads them when a run goes silent. Files rather than messages, because they work the same for
 // worker threads and child processes and need nothing of the runner's own IPC.
+
+/** The one spelling of a path both sides use as a key: forward slashes, and lower case on Windows. */
+export function normPath(p: string): string {
+  const s = p.replace(/\\/g, '/');
+  return typeof process !== 'undefined' && process.platform === 'win32' ? s.toLowerCase() : s;
+}
 
 /** Environment variable naming the directory runner workers write progress files into. */
 export const PROGRESS_DIR_ENV = 'TZAP_PROGRESS_DIR';
