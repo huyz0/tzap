@@ -25,6 +25,14 @@ export interface EngineOptions {
   /** Enabled mutator names; default all. */
   mutators?: readonly string[];
   filters?: ReadonlyArray<{ name: string; filter: MutantFilter }>;
+  /**
+   * Re-decide every warm survivor in isolation before reporting it (default true). A warm try can
+   * be masked by state an earlier run of the same test left behind: a mutant that removes a
+   * registration survives because the registration is still there from the run before. Kills
+   * need no second look — a test failed with the mutant active — but a survivor is what people
+   * act on. Off trades that guarantee for speed.
+   */
+  verifySurvivors?: boolean;
   /** Opt-in reductions: see InstrumentInput.reduce. */
   reduce?: { onePerLine?: boolean; equivalence?: boolean };
   /** Changed lines per root-relative file. Undefined: everything is in scope. Files absent from the map are out of scope. */
@@ -62,7 +70,8 @@ export type EngineEvent =
   | { type: 'narrowed'; pkg: string; files: number; of: number }
   | { type: 'round'; round: number; tries: number; ms: number }
   | { type: 'progress'; decided: number; total: number }
-  | { type: 'warning'; message: string };
+  | { type: 'warning'; message: string }
+  | { type: 'info'; message: string };
 
 /** What the coverage run says about one mutant, handed to the cache so it can decide reuse. */
 export interface MutantCoverage {
@@ -177,9 +186,11 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       if (diag !== undefined) results.set(d.num, { ...d, status: 'CompileError', statusReason: diag });
     }
   }
+  // A mutant a type rule dropped is not ignored by choice: the type system rules it out, as the
+  // checker would. CompileError, outside the score, with the rule's reason.
   const ignored: MutantResult[] = descriptors
     .filter((d) => d.num < 0)
-    .map((d) => ({ ...d, status: 'Ignored' as const, statusReason: d.description ?? d.ignoredBy }));
+    .map((d) => ({ ...d, status: d.ignoredBy?.startsWith('type:') ? ('CompileError' as const) : ('Ignored' as const), statusReason: d.description ?? d.ignoredBy }));
 
   const finish = (tests: Array<TestInfo & { key?: string }>, red: TestRecord[]): AnalysisResult => {
     timer.stop();
@@ -271,6 +282,8 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
   };
   const tests = new Map<string, TestRecord>();
   const staticSites = new Map<number, Set<string>>(); // site -> test files (absolute) that reached it outside tests
+  /** Packages whose suite reports unhandled errors with no mutant active: there they carry no signal. */
+  const noisyUnhandled = new Set<string>();
   const loadLoops = new Map<string, number>(); // normPath'd test file -> loop back-edges while loading
   const allTestFiles = new Map<string, Set<string>>(); // pkg id -> test files
   try {
@@ -287,6 +300,10 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         emit({ type: 'narrowed', pkg: pkg.id, files: files.length, of: all.length });
       }
       const res = files && files.length === 0 ? { id: 0, tests: [], files: [], durationMs: 0 } : await s.run({ id: runId++, mode: 'coverage', files });
+      if (res.unhandledErrors?.length) {
+        noisyUnhandled.add(pkg.id);
+        emit({ type: 'warning', message: `${pkg.id}: the suite reports ${res.unhandledErrors.length} unhandled error(s) with no mutant active (${res.unhandledErrors[0]}); unhandled errors cannot count against mutants there` });
+      }
       const filesOfPkg = new Set<string>();
       for (const f of res.files) {
         filesOfPkg.add(f.file);
@@ -448,82 +465,155 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
     return finish([...tests.values()].filter((t) => t.red === undefined), red);
 
     // --- the warm engine: rounds of many mutants per runner invocation ----------------------
-    /** Returns the mutants whose warm verdict could not be trusted, for the isolated path. */
+    /**
+     * Returns the mutants whose warm verdict could not be trusted, for the isolated path.
+     *
+     * Controls — the test run unmutated — decide which mutant tries count. In an ordinary round
+     * each test's tries are bracketed, `[control, m1, ..., mk, control]`: when both controls pass,
+     * every try in between ran from state the unmutated test is happy with. When one fails — a
+     * mutant corrupted state its module keeps, a registry or a cache — those tries are tried again
+     * with a control before each, `[control, m1, control, m2, ...]`, where a try counts only if the
+     * control just before it passed. The corrupting mutant is then measured cleanly, and so is
+     * everything after it. Only the pairs that ran dirty are tried again, never a whole set.
+     */
     async function warmEngine(): Promise<Array<{ d: MutantDescriptor; tests: string[] }>> {
       const fallback: Array<{ d: MutantDescriptor; tests: string[] }> = [];
       let round = 0;
-      for (const p of covered) {
-        if (p.warm.length === 0) {
-          fallback.push({ d: p.d, tests: p.tests });
-          results.set(p.d.num, { ...p.d, status: 'Pending' });
-        }
-      }
-      let active = covered.filter((p) => p.cursor < p.warm.length);
-      while (active.length > 0) {
+      let verifying = 0;
+      const toFallback = (p: Pending) => {
+        fallback.push({ d: p.d, tests: p.tests });
+        results.set(p.d.num, { ...p.d, status: 'Pending' });
+      };
+      for (const p of covered) if (p.warm.length === 0) toFallback(p);
+
+      /** Tries each mutant against the given tests; `interleave` puts a control before every try. */
+      const runRound = async (entries: Array<{ p: Pending; tests: string[] }>, interleave: boolean) => {
         round++;
-        // Round 1 tries each mutant against its most likely killer only; later rounds try
-        // every remaining covering test, with in-worker skipping once a mutant dies.
-        const firstRound = round === 1;
         const byPkg = new Map<string, Map<string, Try[]>>();
         let tries = 0;
-        for (const p of active) {
-          const upto = firstRound ? p.cursor + 1 : p.warm.length;
-          for (let i = p.cursor; i < upto; i++) {
-            const t = tests.get(p.warm[i]!)!;
+        for (const { p, tests: keys } of entries) {
+          for (const key of keys) {
+            const t = tests.get(key)!;
             let plan = byPkg.get(t.pkg);
             if (!plan) byPkg.set(t.pkg, (plan = new Map()));
             let list = plan.get(t.runnerId);
             if (!list) plan.set(t.runnerId, (list = [control(t)]));
             list.push({ m: p.d.num, ...limitsFor(t, p.d.site) });
+            if (interleave) list.push(control(t));
             tries++;
           }
-          p.cursor = upto;
         }
-        for (const [pkgId, plan] of byPkg) {
-          for (const [id, list] of plan) {
-            const t = tests.get(`${pkgId}::${id}`)!;
-            list.push(control(t));
-          }
-        }
+        if (!interleave) for (const [pkgId, plan] of byPkg) for (const [id, list] of plan) list.push(control(tests.get(`${pkgId}::${id}`)!));
         const started = performance.now();
-        const outcomes = new Map<number, Outcome>();
-        const suspect = new Set<number>();
+        const verdicts = new Map<number, Outcome>();
+        /** (mutant, test key) pairs whose try ran in state that could not be trusted. */
+        const dirty = new Map<number, Set<string>>();
+        const unreached = new Set<number>();
         for (const [pkgId, plan] of byPkg) {
           const res = await runWithRecovery(pkgId, Object.fromEntries(plan), silenceMs);
-          collect(pkgId, res, outcomes, suspect);
-          // A planned try the runner never reported on decided nothing: re-decide it in isolation.
+          collect(pkgId, res, verdicts, dirty, unreached, interleave);
+          // An unhandled error failed the run, and no try owns it: every mutant tried here that no
+          // test killed is decided on its own, in isolation, where the error is attributable.
+          if (res.unhandledErrors?.length && !noisyUnhandled.has(pkgId)) {
+            for (const list of plan.values()) for (const tr of list) if (tr.m >= 0 && !verdicts.get(tr.m)?.killedBy) unreached.add(tr.m);
+          }
+          // A planned try the runner never reported on decided nothing: try it again.
           const reported = new Set(res.tests.flatMap((t) => (t.tries ?? []).map(([m]) => `${t.id}\0${m}`)));
-          for (const [id, list] of plan) for (const tr of list) if (tr.m >= 0 && !reported.has(`${id}\0${tr.m}`)) suspect.add(tr.m);
-        }
-        for (const p of active) {
-          const o = outcomes.get(p.d.num);
-          p.completed += o?.tested ?? 0;
-          if (o?.timeout) {
-            results.set(p.d.num, { ...p.d, status: 'Timeout', statusReason: o.message ?? 'declared hung', coveredBy: p.tests, killedBy: o.killedBy ? [o.killedBy] : [] });
-          } else if (o?.killedBy) {
-            results.set(p.d.num, { ...p.d, status: 'Killed', statusReason: o.message, killedBy: [o.killedBy], coveredBy: p.tests, testsCompleted: p.completed });
-          } else if (suspect.has(p.d.num)) {
-            // A control try around this mutant's tries failed: the context, not the mutant, may
-            // have decided them. It is decided again in isolation.
-            fallback.push({ d: p.d, tests: p.tests });
-            results.set(p.d.num, { ...p.d, status: 'Pending' });
-          } else if (p.cursor >= p.warm.length) {
-            if (p.warm.length < p.tests.length) {
-              // Survived every test the warm engine could trust; the state-sensitive ones get
-              // their say in isolation.
-              fallback.push({ d: p.d, tests: p.tests });
-              results.set(p.d.num, { ...p.d, status: 'Pending' });
-            } else {
-              results.set(p.d.num, { ...p.d, status: 'Survived', coveredBy: p.tests, testsCompleted: p.completed });
+          for (const [id, list] of plan) {
+            for (const tr of list) {
+              if (tr.m < 0 || reported.has(`${id}\0${tr.m}`)) continue;
+              let set = dirty.get(tr.m);
+              if (!set) dirty.set(tr.m, (set = new Set()));
+              set.add(`${pkgId}::${id}`);
             }
           }
         }
         emit({ type: 'round', round, tries, ms: Math.round(performance.now() - started) });
+        return { verdicts, dirty, unreached };
+      };
+
+      const decide = (p: Pending, o: Outcome | undefined) => {
+        p.completed += o?.tested ?? 0;
+        if (o?.timeout) {
+          results.set(p.d.num, { ...p.d, status: 'Timeout', statusReason: o.message ?? 'declared hung', coveredBy: p.tests, killedBy: o.killedBy ? [o.killedBy] : [] });
+          return true;
+        }
+        if (o?.killedBy) {
+          results.set(p.d.num, { ...p.d, status: 'Killed', statusReason: o.message, killedBy: [o.killedBy], coveredBy: p.tests, testsCompleted: p.completed });
+          return true;
+        }
+        return false;
+      };
+      const survive = (p: Pending) => {
+        // Survived every test the warm engine could trust. Confirmed in isolation unless told not
+        // to; covered by state-sensitive tests too, it always is.
+        if (p.warm.length < p.tests.length || options.verifySurvivors !== false) {
+          verifying++;
+          toFallback(p);
+        }
+        else results.set(p.d.num, { ...p.d, status: 'Survived', coveredBy: p.tests, testsCompleted: p.completed });
+      };
+      const redo = new Map<number, { p: Pending; tests: Set<string> }>();
+      const settle = (p: Pending, round: { verdicts: Map<number, Outcome>; dirty: Map<number, Set<string>>; unreached: Set<number> }, done: boolean) => {
+        if (decide(p, round.verdicts.get(p.d.num))) {
+          redo.delete(p.d.num);
+          return;
+        }
+        if (round.unreached.has(p.d.num)) {
+          redo.delete(p.d.num);
+          toFallback(p);
+          return;
+        }
+        const d = round.dirty.get(p.d.num);
+        if (d?.size) {
+          const r = redo.get(p.d.num) ?? { p, tests: new Set<string>() };
+          for (const k of d) r.tests.add(k);
+          redo.set(p.d.num, r);
+        }
+        if (done && !redo.has(p.d.num)) survive(p);
+        else if (done) results.set(p.d.num, { ...p.d, status: 'Pending' });
+      };
+
+      // Round 1 tries each mutant against its most likely killer only; round 2 every remaining
+      // covering test, with in-worker skipping once a mutant dies.
+      let active = covered.filter((p) => p.warm.length > 0);
+      let first = true;
+      while (active.length > 0) {
+        const entries = active.map((p) => {
+          const to = first ? p.cursor + 1 : p.warm.length;
+          const e = { p, tests: p.warm.slice(p.cursor, to) };
+          p.cursor = to;
+          return e;
+        });
+        first = false;
+        const r = await runRound(entries, false);
+        for (const p of active) settle(p, r, p.cursor >= p.warm.length);
         emit({ type: 'progress', decided: decidedCount(), total });
-        active = active.filter((p) => !results.has(p.d.num));
+        active = active.filter((p) => !results.has(p.d.num) && p.cursor < p.warm.length);
       }
+
+      // The pairs that ran in untrusted state, again, each behind its own control, until a round
+      // resolves none of them.
+      while (redo.size > 0) {
+        const before = [...redo.values()].reduce((n, r) => n + r.tests.size, 0);
+        const entries = [...redo.values()].map((r) => ({ p: r.p, tests: [...r.tests] }));
+        for (const e of entries) results.delete(e.p.d.num);
+        redo.clear();
+        const r = await runRound(entries, true);
+        for (const { p } of entries) settle(p, r, true);
+        const after = [...redo.values()].reduce((n, x) => n + x.tests.size, 0);
+        emit({ type: 'progress', decided: decidedCount(), total });
+        if (after >= before) {
+          // No progress: the state these tests start from is itself broken (a test that depends
+          // on another it no longer follows). Decide them in isolation.
+          for (const { p } of redo.values()) toFallback(p);
+          redo.clear();
+        }
+      }
+
       for (const f of fallback) results.delete(f.d.num);
-      if (fallback.length) emit({ type: 'warning', message: `${fallback.length} mutants re-decided in isolation: a control try failed around them, or the test never reached them in the warm run` });
+      if (verifying) emit({ type: 'info', message: `confirming ${verifying} warm survivors in isolation` });
+      if (fallback.length > verifying) emit({ type: 'warning', message: `${fallback.length - verifying} mutants re-decided in isolation: never reached in the warm run, or covered by tests whose warm runs could not be trusted` });
       return fallback;
     }
 
@@ -534,25 +624,39 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
       tested: number;
     }
 
-    function collect(pkgId: string, res: RunResult, outcomes: Map<number, Outcome>, suspect: Set<number>) {
+    /**
+     * Folds one run's tries into verdicts. Bracketed (`interleave` false): a test's tries count
+     * only if both controls around them passed. Interleaved: a try counts if the control just
+     * before it passed. A try that does not count makes its (mutant, test) pair dirty; one that
+     * counts but never reached the mutant makes the mutant unreached.
+     */
+    function collect(pkgId: string, res: RunResult, verdicts: Map<number, Outcome>, dirty: Map<number, Set<string>>, unreached: Set<number>, interleave: boolean) {
       for (const t of res.tests) {
         const tries = t.tries ?? [];
-        const first = tries[0];
-        const last = tries[tries.length - 1];
-        const controlFailed =
-          (first !== undefined && first[0] === -1 && first[1] !== 'S') || (last !== undefined && tries.length > 1 && last[0] === -1 && last[1] !== 'S');
+        const key = `${pkgId}::${t.id}`;
+        const bracketFailed = !interleave && tries.some(([m, outcome]) => m < 0 && outcome !== 'S');
+        let clean = true;
         for (const [m, outcome, message] of tries) {
-          if (m < 0) continue;
-          let o = outcomes.get(m);
-          if (!o) outcomes.set(m, (o = { tested: 0 }));
+          if (m < 0) {
+            clean = outcome === 'S';
+            continue;
+          }
+          let o = verdicts.get(m);
+          if (!o) verdicts.set(m, (o = { tested: 0 }));
           if (outcome === 'X') continue;
-          if (controlFailed || outcome === 'U') {
-            suspect.add(m);
+          if (bracketFailed || (interleave && !clean)) {
+            let set = dirty.get(m);
+            if (!set) dirty.set(m, (set = new Set()));
+            set.add(key);
+            continue;
+          }
+          if (outcome === 'U') {
+            unreached.add(m);
             continue;
           }
           o.tested++;
           if ((outcome === 'K' || outcome === 'T') && o.killedBy === undefined) {
-            o.killedBy = `${pkgId}::${t.id}`;
+            o.killedBy = key;
             o.timeout = outcome === 'T';
             o.message = message;
           }
@@ -570,6 +674,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
         if (!res.timedOut) {
           merged.tests.push(...res.tests);
           merged.files.push(...res.files);
+          if (res.unhandledErrors?.length) merged.unhandledErrors = [...(merged.unhandledErrors ?? []), ...res.unhandledErrors];
           return merged;
         }
         const hung = new Set((res.inFlight ?? []).map((x) => x.mutant).filter((m) => m >= 0));
@@ -732,6 +837,19 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
           const rest: Job = { pkgId: job.pkgId, assign: new Map([...job.assign].filter(([, it]) => !it.killedBy)) };
           if (rest.assign.size > 0 && rest.assign.size < job.assign.size) await runJob(rest, session, retire);
           return;
+        }
+        if (res.unhandledErrors?.length && !noisyUnhandled.has(job.pkgId)) {
+          if (byNum.size > 1) {
+            // Several mutants shared the run: decide each alone to see whose error it is.
+            for (const it of byNum.values()) await runJob({ pkgId: job.pkgId, assign: new Map([...job.assign].filter(([, x]) => x === it)) }, session, retire);
+            return;
+          }
+          // The suite fails with this mutant: `vitest run` would exit non-zero. Detected.
+          const it = [...byNum.values()][0]!;
+          if (!it.killedBy) {
+            it.killedBy = `${job.pkgId}::unhandled error`;
+            it.message = `unhandled error during the run: ${res.unhandledErrors[0]}`;
+          }
         }
         const fileMutant = new Map(Object.entries(staticPlan));
         for (const f of res.files) {

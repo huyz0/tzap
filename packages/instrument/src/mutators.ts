@@ -310,11 +310,18 @@ export const logicalOperator: Mutator = {
     const right = node.right as Node;
     const r = swapOperator(ctx, node, left, right, op, next);
     if (!r) return [];
-    // `a ?? b ?? c` is `(a ?? b) ?? c`; swapping the outer operator yields `a ?? b && c`, which
-    // JavaScript refuses to parse: `??` cannot mix with `&&` or `||` without parentheses.
-    // An operand wrapped in its own parentheses starts after (left) or ends before (right) its parent.
-    const bare = (n: Node) => n.type === 'LogicalExpression' && n.operator === '??' && (n === left ? n.start === node.start : n.end === node.end);
-    if (op === '??' && (bare(left) || bare(right))) {
+    // Swapping the operator can regroup the operands. `a || b || c` is `(a || b) || c`; with its
+    // outer `||` swapped, text substitution gives `a || b && c`, which is `a || (b && c)` — a
+    // different mutant from Stryker's `(a || b) && c`. And `a ?? b ?? c` would become
+    // `a ?? b && c`, which does not parse: `??` cannot mix with `&&` or `||` unparenthesised.
+    // An operand the new operator would bind differently gets parentheses. An operand already in
+    // its own parentheses starts after (left) or ends before (right) its parent.
+    const regroups = (n: Node) =>
+      n.type === 'LogicalExpression' &&
+      (n === left ? n.start === node.start : n.end === node.end) &&
+      (next === '&&' ? n.operator === '||' || n.operator === '??' : n.operator === '??');
+    const bare = regroups;
+    if (bare(left) || bare(right)) {
       const at = r.length - (node.end - right.start);
       const l = bare(left) ? `(${ctx.source.slice(left.start, left.end)})` : ctx.source.slice(left.start, left.end);
       const mid = r.slice(left.end - node.start, at);

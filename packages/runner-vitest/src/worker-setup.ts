@@ -97,10 +97,22 @@ export function setup(vitest: Vitest): void {
 
   // Vitest parses hook sources: the first parameter must be a destructuring pattern.
   vitest.beforeAll(({}, file) => {
-    walk(file, (t) => {
+    // Tests that come before a planned one still run, unmutated, as they did in the coverage run:
+    // a test often depends on what an earlier one left behind (a registered handler, a filled
+    // registry), and skipping them sends it down a different path — which the engine sees as the
+    // mutant going unreached, and pays for with an isolated run. Tests after the last planned one
+    // cannot affect it and are skipped.
+    const all: Task[] = [];
+    walk(file, (t) => all.push(t));
+    let last = -1;
+    all.forEach((t, i) => {
+      if (plan[t.id]?.length) last = i;
+    });
+    all.forEach((t, i) => {
       const tries = plan[t.id];
       if (!tries || tries.length === 0) {
-        if (t.mode === 'run' || t.mode === 'queued') t.mode = 'skip';
+        if (i > last && (t.mode === 'run' || t.mode === 'queued')) t.mode = 'skip';
+        t.concurrent = false;
         return;
       }
       t.repeats = tries.length - 1;

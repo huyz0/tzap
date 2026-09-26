@@ -30,6 +30,8 @@
     "@tzap/runner-vitest": "workspace:*",
     "@tzap/instrument": "workspace:*",
     "@tzap/runner-jest": "workspace:*",
-    "@tzap/runner-node": "workspace:*"
+    "@tzap/runner-node": "workspace:*",
+    "@tzap/runner-mocha": "workspace:*",
+    "@tzap/typecheck": "workspace:*"
   }
 }

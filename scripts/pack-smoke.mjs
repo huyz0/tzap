@@ -28,7 +28,7 @@ function setUp(fixture, extra) {
 }
 const expected = 'tzap: 6 survived, 3 uncovered of 37 mutants (score 75.7%, strength 82.4%)';
 try {
-  for (const [fixture, extra] of [['sample-vitest', ['vitest@5.0.2']], ['sample-node', []]]) {
+  for (const [fixture, extra] of [['sample-vitest', ['vitest@5.0.2']], ['sample-node', []], ['sample-mocha', ['mocha@12.0.2']]]) {
     const dir = setUp(fixture, extra);
     const out = run('npx', ['tzap', 'run', '-q', '-r', 'agent'], dir);
     const first = out.split('\n')[0];

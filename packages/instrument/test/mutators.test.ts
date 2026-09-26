@@ -359,3 +359,19 @@ describe('reductions', () => {
     expect(out.mutants.map((m) => `${m.location.start.line} ${m.replacement}`)).toEqual(['1 {}', '5 () => undefined']);
   });
 });
+
+describe('LogicalOperator keeps the grouping of a chain', () => {
+  it('parenthesises the left operand when && would otherwise bind tighter', () => {
+    // Stryker's mutant for the outer || of `a || b || c` is `(a || b) && c`.
+    expect(inventory('x = a || b || c;', ['LogicalOperator'])).toEqual([
+      'LogicalOperator 1:5 a || b || c -> (a || b) && c',
+      'LogicalOperator 1:5 a || b -> a && b',
+    ]);
+  });
+  it('needs no parentheses when || replaces &&', () => {
+    expect(inventory('x = a && b && c;', ['LogicalOperator'])).toEqual([
+      'LogicalOperator 1:5 a && b && c -> a && b || c',
+      'LogicalOperator 1:5 a && b -> a || b',
+    ]);
+  });
+});

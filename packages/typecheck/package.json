@@ -1,0 +1,26 @@
+{
+  "name": "@tzap/typecheck",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@tzap/instrument": "workspace:*",
+    "@tzap/model": "workspace:*"
+  },
+  "devDependencies": {
+    "@tzap/core": "workspace:*",
+    "@tzap/runner-vitest": "workspace:*",
+    "vitest": "5.0.2"
+  }
+}

@@ -87,6 +87,12 @@ export interface RunResult {
   id: number;
   tests: TestOutcome[];
   files: FileOutcome[];
+  /**
+   * Errors the runner caught outside any test's own result — an exception thrown from a timer
+   * after the test that set it finished, an unhandled rejection. They fail the run, but belong to
+   * no single try.
+   */
+  unhandledErrors?: string[];
   /** The session was killed by the wall-clock backstop; `inFlight` names what was running. */
   timedOut?: boolean;
   inFlight?: Array<{ test: string; mutant: number }>;

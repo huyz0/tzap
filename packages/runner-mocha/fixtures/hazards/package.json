@@ -1,0 +1,6 @@
+{
+  "name": "fixture-runner-mocha-hazards",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "mocha" }
+}

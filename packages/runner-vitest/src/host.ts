@@ -115,7 +115,9 @@ async function init(o: SessionOptions): Promise<void> {
   const config = o.pkg.runner?.config ? path.resolve(o.root, o.pkg.runner.config) : undefined;
   const cliOptions: Record<string, unknown> = {
     watch: false,
-    reporters: [],
+    // One inert reporter, not an empty list: Vitest 4.1 replaces an empty list with its default
+    // reporter, which tzap never initialises, and the run then fails as it ends.
+    reporters: [{}],
     passWithNoTests: true,
     silent: true,
     update: false,
@@ -223,8 +225,10 @@ async function run(req: RunRequest): Promise<RunResult> {
   }
   const tests: TestOutcome[] = [];
   const files: FileOutcome[] = [];
+  const unhandled: string[] = [];
   if (specs.length > 0) {
     const res = await v.runTestSpecifications(specs);
+    for (const e of res.unhandledErrors ?? []) unhandled.push(String((e as { message?: string })?.message ?? e).slice(0, 300));
     // The result lists every module Vitest has ever run in this instance, not only this run's.
     const ran = new Set(specs.map((s) => norm(s.moduleId)));
     for (const mod of res.testModules) {
@@ -263,7 +267,9 @@ async function run(req: RunRequest): Promise<RunResult> {
       }
     }
   }
-  return { id: req.id, tests, files, durationMs: performance.now() - started };
+  const out: RunResult = { id: req.id, tests, files, durationMs: performance.now() - started };
+  if (unhandled.length) out.unhandledErrors = unhandled;
+  return out;
 }
 
 process.on('message', (msg: HostRequest) => {

@@ -22,7 +22,9 @@ import { reporters as reporterRegistry, writeReports } from '@tzap/report';
 
 const reporterNames = Object.keys(reporterRegistry);
 import { createJestSession } from '@tzap/runner-jest';
+import { createMochaSession } from '@tzap/runner-mocha';
 import { createNodeTestSession } from '@tzap/runner-node';
+import { createTypeChecker, typeFilters, type TypeChecker } from '@tzap/typecheck';
 import { createVitestSession } from '@tzap/runner-vitest';
 import { loadCache, saveCache } from '@tzap/core';
 
@@ -51,6 +53,9 @@ const RUN_OPTIONS = {
   'one-per-line': { type: 'boolean' },
   dedup: { type: 'boolean' },
   extreme: { type: 'boolean' },
+  'no-verify-survivors': { type: 'boolean' },
+  typecheck: { type: 'string' },
+  tsconfig: { type: 'string' },
   'dry-run': { type: 'boolean' },
   quiet: { type: 'boolean', short: 'q' },
   filter: { type: 'string' },
@@ -85,6 +90,13 @@ Run options:
       --one-per-line            keep one mutant per line (faster; stops reporting some gaps)
       --dedup                   drop mutants that compile to the original or to each other
       --extreme                 one mutant per function: its body removed (Descartes-style)
+      --typecheck off|survivors|all
+                                type-check undetected mutants (survivors, the default when the
+                                project has TypeScript and a tsconfig) or every mutant before it
+                                runs (all); rejected ones are CompileError, outside the score
+      --tsconfig FILE           the tsconfig to type-check against (default: the nearest one)
+      --no-verify-survivors     report warm survivors without confirming them in isolation
+                                (faster; state a test leaves behind can then hide a kill)
       --dry-run                 print what would be analysed, and stop
   -q, --quiet                   no progress output
 
@@ -164,6 +176,9 @@ function progress(quiet: boolean) {
       case 'warning':
         line = `tzap: warning: ${e.message}`;
         break;
+      case 'info':
+        line = `tzap: ${e.message}`;
+        break;
       default:
         return;
     }
@@ -211,6 +226,31 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
 
   const cacheDir = (values['cache-dir'] as string | undefined) ?? model.cache?.dir;
   const filters = values['no-arid'] ? [] : aridFilters();
+
+  // Type checking: explicit modes must work; the default quietly steps aside for a project with
+  // no TypeScript or no tsconfig.
+  const tcRequested = values.typecheck as string | undefined;
+  if (tcRequested !== undefined && !['off', 'survivors', 'all'].includes(tcRequested)) throw new UsageError(`--typecheck: expected off, survivors or all, got "${tcRequested}"`);
+  let checker: TypeChecker | undefined;
+  let tcMode: 'survivors' | 'all' | undefined;
+  if (tcRequested !== 'off') {
+    try {
+      checker = createTypeChecker({ root: model.root, ...(values.tsconfig ? { tsconfig: path.resolve(cwd, values.tsconfig as string) } : {}) });
+      // Asked of a file being mutated: the tsconfig that governs it, not the workspace root's.
+      const probe = model.packages.map((p) => sourceFiles(model.root, p)[0]).find((f) => f !== undefined);
+      const strict = await checker.strictNullChecks(probe ? relativeTo(model.root, probe) : undefined);
+      if (strict === undefined) throw new Error('no tsconfig applies to the project');
+      tcMode = (tcRequested as 'survivors' | 'all' | undefined) ?? 'survivors';
+      // Syntactic rules that need no checker, each measured at 99.6-100% precision; they assume
+      // strictNullChecks. Their mutants are CompileError, like the checker's.
+      if (strict) for (const f of typeFilters()) filters.push({ name: `type:${f.name}`, filter: f.filter });
+    } catch (e) {
+      await checker?.close();
+      checker = undefined;
+      if (tcRequested) throw new UsageError(`--typecheck ${tcRequested}: cannot type-check this project: ${(e as Error).message}`);
+      if (!quiet) process.stderr.write(`tzap: type checking off: ${(e as Error).message}\n`);
+    }
+  }
   const cache = cacheDir ? loadCache(path.resolve(cwd, cacheDir), model, { tzapVersion: VERSION, mutators, filters: filters.map((f) => f.name) }) : undefined;
   if (cache?.note && !quiet) process.stderr.write(`tzap: ${cache.note}\n`);
 
@@ -219,8 +259,10 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
     mutators,
     filters,
     reduce: { onePerLine: values['one-per-line'] === true, equivalence: values.dedup === true },
+    verifySurvivors: values['no-verify-survivors'] !== true,
+    ...(checker && tcMode ? { typecheck: { mode: tcMode, check: (m, root) => checker!.check(m, root) } } : {}),
     lines: changed?.files,
-    runners: { vitest: createVitestSession, jest: createJestSession, node: createNodeTestSession },
+    runners: { vitest: createVitestSession, jest: createJestSession, node: createNodeTestSession, mocha: createMochaSession },
     workers,
     concurrency,
     tzapVersion: VERSION,
@@ -229,6 +271,7 @@ async function run(values: Record<string, unknown>, cwd: string): Promise<number
     unchanged: cache?.lookupUnchanged,
     onEvent: progress(quiet),
   });
+  await checker?.close();
   if (cache) saveCache(cache, result);
 
   mkdirSync(outDir, { recursive: true });
