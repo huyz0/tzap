@@ -4,3 +4,4 @@ dist/
 .stryker-tmp/
 reports/
 *.log
+*.tsbuildinfo

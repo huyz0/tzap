@@ -1,0 +1,7 @@
+{
+  "name": "fixture-sample-vitest",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "vitest run" },
+  "devDependencies": { "vitest": "5.0.2" }
+}

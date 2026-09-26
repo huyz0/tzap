@@ -1,0 +1,10 @@
+import { analyse } from '@tzap/core';
+import { createVitestSession } from '@tzap/runner-vitest';
+import { score } from '@tzap/model';
+const engine = process.argv[2] ?? 'warm';
+const model = { schemaVersion: 1, root: 'E:/work/tzap/fixtures/sample-vitest', packages: [{ id: 'sample', root: '.', sources: ['src/**/*.ts'], runner: { kind: 'vitest' } }] };
+const t0 = performance.now();
+const r = await analyse(model, { engine, runners: { vitest: createVitestSession }, tzapVersion: '0.0.0', onEvent: (e) => console.error(JSON.stringify(e)) });
+console.log(((performance.now()-t0)/1000).toFixed(2)+'s', JSON.stringify(r.timings));
+for (const m of r.mutants) console.log(m.status.padEnd(11), m.file, m.location.start.line+':'+m.location.start.column, m.mutatorName, JSON.stringify(m.replacement), m.static?'static':'', m.statusReason?.slice(0,60) ?? '');
+console.log(score(r.mutants));

@@ -1,0 +1,24 @@
+{
+  "name": "@tzap/instrument",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@tzap/model": "workspace:*",
+    "@tzap/runtime": "workspace:*",
+    "magic-string": "1.4.2",
+    "oxc-parser": "0.151.0",
+    "weapon-regex": "2.0.5"
+  }
+}

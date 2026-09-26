@@ -1,0 +1,115 @@
+/**
+ * The contract between the engine and a runner session, and the messages a runner host
+ * exchanges with the engine. Zero dependencies beyond the model; payloads are plain data so they
+ * survive structured clone and JSON alike.
+ */
+import type { PackageModel } from '@tzap/model';
+
+/** One attempt at a mutant against one test. */
+export interface Try {
+  /** Mutant number. */
+  m: number;
+  /** Limit on the mutant's replacement being evaluated before the try is declared hung. */
+  N: number;
+  /** Limit on loop back-edges before the try is declared hung. */
+  L: number;
+}
+
+/**
+ * - `coverage`: nothing active; record per-test hits, loop counts, durations and red tests.
+ * - `mutate`: warm; per test, try each planned mutant in turn (runtime activation).
+ * - `static`: one mutant active before any module evaluates; the named tests run once each.
+ */
+export type RunMode = 'coverage' | 'mutate' | 'static';
+
+export interface RunRequest {
+  id: number;
+  mode: RunMode;
+  /** Absolute test-file paths to run; undefined runs every test file. */
+  files?: string[];
+  /** `mutate`: test id -> ordered tries. `static`: test id -> [one try]. Tests not listed are skipped. */
+  plan?: Record<string, Try[]>;
+  /** `static`: the mutant active for the whole run. */
+  staticMutant?: number;
+  /** Wall-clock budget for the whole run, after which the session is killed. */
+  budgetMs?: number;
+}
+
+/** Outcome letter of a try: Killed, Survived, Timeout (declared hung), or X (skipped: already killed this round). */
+export type TryOutcome = 'K' | 'S' | 'T' | 'X';
+
+export interface TestOutcome {
+  id: string;
+  /** Full name, suites joined by " > ". */
+  name: string;
+  /** Absolute path of the test file. */
+  file: string;
+  state: 'pass' | 'fail' | 'skip';
+  duration: number;
+  /** First failure message, for a test that failed unmutated (coverage) or a static kill. */
+  message?: string;
+  /** `coverage`: [site, hits] pairs reached inside this test. */
+  hits?: Array<[number, number]>;
+  /** `coverage`: loop back-edges taken inside this test. */
+  loops?: number;
+  /** `mutate`/`static`: [mutant, outcome, message?] per try, in order. */
+  tries?: Array<[number, TryOutcome, string?]>;
+}
+
+export interface FileOutcome {
+  /** Absolute path of the test file. */
+  file: string;
+  /** The file failed to load or a hook outside any test failed. */
+  error?: string;
+  /** `coverage`: sites reached outside any test while this file ran (module evaluation, hooks). */
+  staticHits?: Array<[number, number]>;
+}
+
+export interface RunResult {
+  id: number;
+  tests: TestOutcome[];
+  files: FileOutcome[];
+  /** The session was killed by the wall-clock backstop; `inFlight` names what was running. */
+  timedOut?: boolean;
+  inFlight?: Array<{ test: string; mutant: number }>;
+  durationMs: number;
+}
+
+export interface SessionOptions {
+  /** Absolute model root. */
+  root: string;
+  pkg: PackageModel;
+  /** Absolute path of a JSON file mapping absolute source paths to instrumented `{ code, map }`. */
+  instrumented: string;
+  /** Force module isolation between test files (static mutants need it). */
+  isolate?: boolean;
+  /** Worker count for the runner's own pool. */
+  workers?: number;
+  /** Absolute scratch directory the session may write to. */
+  tmpDir: string;
+}
+
+export interface RunnerSession {
+  readonly kind: string;
+  start(): Promise<{ runnerVersion: string }>;
+  run(request: RunRequest): Promise<RunResult>;
+  close(): Promise<void>;
+}
+
+export type RunnerFactory = (options: SessionOptions) => RunnerSession;
+
+// --- messages between an engine and a host process ----------------------------------------
+
+export type HostRequest =
+  | { type: 'init'; options: SessionOptions }
+  | { type: 'run'; request: RunRequest }
+  | { type: 'close' };
+
+export type HostResponse =
+  | { type: 'ready'; runnerVersion: string }
+  | { type: 'result'; result: RunResult }
+  | { type: 'progress'; runId: number; test: string; mutant: number }
+  | { type: 'error'; message: string; during: 'init' | 'run' | 'background' };
+
+/** Name of the BroadcastChannel runner workers report progress on, so a hang can be attributed. */
+export const PROGRESS_CHANNEL = 'tzap-progress';
