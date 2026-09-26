@@ -320,3 +320,18 @@ describe('arid rules', () => {
     expect(out.mutants.filter((m) => m.ignoredBy === 'arid').length).toBeGreaterThan(3);
   });
 });
+
+describe('single-file components', () => {
+  it('mutates only <script> blocks, at the positions of the original file', () => {
+    const src = '<template>\n  <p>{{ a + b }}</p>\n</template>\n<script setup lang="ts">\nconst x = 1 + 2;\n</script>\n';
+    const out = instrument({ file: 'C.vue', source: src, mutators: ['ArithmeticOperator'], firstMutant: 0, firstSite: 0 });
+    expect(out.mutants.map((m) => `${m.location.start.line}:${m.location.start.column} ${m.replacement}`)).toEqual(['5:11 1 - 2']);
+    expect(out.code).toContain('{{ a + b }}');
+    expect(out.code).toContain('<template>');
+  });
+  it('puts the runtime header in every script block', () => {
+    const src = '<script context="module">\nexport const k = 1 + 1;\n</script>\n<script>\nlet n = 2 * 3;\n</script>\n';
+    const out = instrument({ file: 'C.svelte', source: src, mutators: ['ArithmeticOperator'], firstMutant: 0, firstSite: 0 });
+    expect(out.code!.match(/var __tzap=/g)).toHaveLength(2);
+  });
+});

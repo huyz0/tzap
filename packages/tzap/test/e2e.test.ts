@@ -94,6 +94,25 @@ describe('hazards-vitest', () => {
   }, 240_000);
 });
 
+describe('frontend components', () => {
+  // TSX under jsdom with Testing Library, and single-file components whose <script> blocks are
+  // mutated in place while their templates are left alone.
+  for (const [name, sources, expected] of [
+    ['react-vitest', ['src/**/*.tsx'], { Killed: 14, Survived: 6 }],
+    ['vue-vitest', ['src/**/*.vue'], { Killed: 13, Survived: 2 }],
+    ['svelte-vitest', ['src/**/*.svelte'], { Killed: 5 }],
+  ] as const) {
+    it(`${name}: agrees with the reference engine`, async () => {
+      const m = model(fixture(name), [...sources]);
+      const warm = await run(m);
+      const counts = warm.mutants.reduce<Record<string, number>>((c, x) => ((c[x.status] = (c[x.status] ?? 0) + 1), c), {});
+      expect(counts).toEqual(expected);
+      const reference = await run(m, { engine: 'reference', concurrency: 6 });
+      expect(verdicts(reference)).toEqual(verdicts(warm));
+    }, 240_000);
+  }
+});
+
 describe('the cache', () => {
   it('reuses every verdict when nothing changed, without running a test', async () => {
     const dir = path.join(scratch, 'cache-a');

@@ -49,7 +49,7 @@ describe('discover', () => {
     expect(pkg).toMatchObject({
       id: 'single-vitest',
       root: '.',
-      sources: ['src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}'],
+      sources: ['src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs,vue,svelte}'],
       tsconfig: 'tsconfig.json',
       runner: { kind: 'vitest', config: 'vitest.config.ts', version: '5.0.2' },
     });
@@ -106,7 +106,7 @@ describe('discover', () => {
     expect(byId(model.packages, 'b').runner).toEqual({ kind: 'node' });
 
     const c = byId(model.packages, 'c');
-    expect(c.sources).toEqual(['**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}']);
+    expect(c.sources).toEqual(['**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs,vue,svelte}']);
     expect(c.exclude).toEqual(expect.arrayContaining(['*.config.*', '.*rc.*', 'scripts/**', '**/*.{test,spec}.*']));
     expect(c.runner?.kind).toBe('vitest');
     expect(notes.some((n) => n.startsWith('c (packages/c)') && /no src\//.test(n))).toBe(true);
@@ -154,8 +154,8 @@ describe('discover', () => {
     const [only] = model.packages;
     expect(only!.root).toBe('.');
     expect(only!.runner).toEqual({ kind: 'vitest', config: 'vitest.config.ts', version: '5.0.2' });
-    expect(only!.sources).toContain('packages/app/src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}');
-    expect(only!.sources).toContain('packages/lib/src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}');
+    expect(only!.sources).toContain('packages/app/src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs,vue,svelte}');
+    expect(only!.sources).toContain('packages/lib/src/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs,vue,svelte}');
     expect(notes.some((n) => n.includes('lists Vitest projects'))).toBe(true);
   });
 

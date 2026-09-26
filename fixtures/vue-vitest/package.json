@@ -1,0 +1,8 @@
+{
+  "name": "fixture-vue-vitest",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "vitest run" },
+  "dependencies": { "vue": "^3.5.0" },
+  "devDependencies": { "vitest": "5.0.2", "jsdom": "^26.0.0", "@vitejs/plugin-vue": "^6.0.0", "@vue/test-utils": "^2.4.0" }
+}

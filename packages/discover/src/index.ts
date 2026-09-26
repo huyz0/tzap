@@ -25,7 +25,7 @@ export interface Discovery {
   notes: string[];
 }
 
-const SOURCE_EXT = '{ts,tsx,mts,cts,js,jsx,mjs,cjs}';
+const SOURCE_EXT = '{ts,tsx,mts,cts,js,jsx,mjs,cjs,vue,svelte}';
 
 /** Excluded from every package's sources. */
 const ALWAYS_EXCLUDE = [

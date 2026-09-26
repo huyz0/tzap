@@ -6,6 +6,7 @@ import { type Node, children, FUNCTION_TYPES, isIdentifier, isNode, isSkipped, L
 import { Directives } from './directives.js';
 import { ALL_MUTATORS, forTestOffset, type Mutator, type Placement } from './mutators.js';
 import { parse } from './parse.js';
+import { isSfc, sfcScripts, type SfcScripts } from './sfc.js';
 import { LineIndex } from './text.js';
 
 export type LineRange = readonly [start: number, end: number];
@@ -191,8 +192,12 @@ function scopeName(node: Node, parent: Node | undefined, anonymous: number): str
 const truncate = (s: string) => (s.length > 200 ? `${s.slice(0, 197)}...` : s);
 
 export function instrument(input: InstrumentInput): InstrumentOutput {
-  const { source, file } = input;
-  const parsed = parse(file, source);
+  const { file } = input;
+  const original = input.source;
+  // Vue and Svelte: parse only the script blocks, at their original offsets.
+  const sfc: SfcScripts | undefined = isSfc(file) ? sfcScripts(original) : undefined;
+  const source = sfc ? sfc.blanked : original;
+  const parsed = parse(sfc ? `${file}.${sfc.lang}` : file, source);
   const errors = parsed.errors;
   if (errors.length > 0 || !parsed.program) {
     return { code: undefined, map: undefined, mutants: [], nextMutant: input.firstMutant, nextSite: input.firstSite, errors };
@@ -406,7 +411,7 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
   }
 
   const R = RUNTIME_GLOBAL;
-  const s = new MagicString(source);
+  const s = new MagicString(original);
   type Edit = { start: number; end: number; order: number; apply: () => void };
   const edits: Edit[] = [];
   let order = 0;
@@ -489,7 +494,13 @@ export function instrument(input: InstrumentInput): InstrumentOutput {
   const firstStatement = statements.find((x) => !(x.type === 'ExpressionStatement' && typeof x.directive === 'string'));
   const headerAt = lastDirective ? lastDirective.end : firstStatement ? firstStatement.start : source.length;
   const header = runtimeHeader(maxSite);
-  s.prependRight(headerAt, lastDirective ? `\n${header}\n` : `${header}\n`);
+  if (sfc) {
+    // Every block: Vue's <script setup> body ends up inside setup(), a plain <script> at module
+    // level, and each must see the runtime. `var` may be declared twice.
+    for (const at of sfc.blockStarts) s.prependRight(at, `${header}\n`);
+  } else {
+    s.prependRight(headerAt, lastDirective ? `\n${header}\n` : `${header}\n`);
+  }
 
   const code = s.toString();
   const map = s.generateMap({ hires: 'boundary', source: file, includeContent: true });

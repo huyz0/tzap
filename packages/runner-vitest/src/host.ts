@@ -57,6 +57,11 @@ async function init(o: SessionOptions): Promise<void> {
   process.chdir(pkgRoot);
   for (const [k, v] of Object.entries(o.pkg.env ?? {})) process.env[k] = v;
   process.env.TZAP = '1';
+  // What the vitest CLI sets before it loads a config; plugins read these in their config hooks
+  // (@testing-library/svelte adds the `browser` condition only when VITEST is set).
+  process.env.TEST = 'true';
+  process.env.VITEST = 'true';
+  process.env.NODE_ENV ??= 'test';
 
   const require = createRequire(path.join(pkgRoot, 'package.json'));
   let vitestNodePath: string;

@@ -1,0 +1,7 @@
+{
+  "name": "fixture-svelte-vitest",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "vitest run" },
+  "devDependencies": { "vitest": "5.0.2", "jsdom": "^26.0.0", "svelte": "^5.0.0", "@sveltejs/vite-plugin-svelte": "^6.0.0", "@testing-library/svelte": "^5.2.0" }
+}
