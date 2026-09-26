@@ -8,7 +8,7 @@ serveHost({
   label: 'the Mocha host',
   progressName: 'mocha',
   needs: 'module.registerHooks',
-  init(o, pkgRoot, progress) {
+  init({ options: o, pkgRoot, progress }) {
     executor = new Executor({ session: o, pkgRoot, onProgress: progress });
     return { executor, version: executor.version };
   },

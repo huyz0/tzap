@@ -11,12 +11,11 @@
 import { createRequire } from 'node:module';
 import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { FileOutcome, HostRequest, HostResponse, RunRequest, RunResult, SessionOptions, TestOutcome } from '@tzap/protocol';
+import type { FileOutcome, RunRequest, RunResult, TestOutcome } from '@tzap/protocol';
+import { serveHost, type HostContext, type HostReady } from '@tzap/runner-kit';
 import type { RunState, StateKey } from './shared.cjs';
 
 const STATE_KEY: StateKey = '__tzapJestRun';
-
-const send = (m: HostResponse) => process.send?.(m);
 const slash = (p: string) => p.replace(/\\/g, '/');
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 /** A regex source matching any path under `dir`, with either separator. */
@@ -39,12 +38,12 @@ let pkgRoot: string;
 let rootDir: string;
 let envShim = '';
 let jestMajor = 0;
+let progress: HostContext['progress'];
 
-async function init(o: SessionOptions): Promise<void> {
-  pkgRoot = path.resolve(o.root, o.pkg.root);
-  process.chdir(pkgRoot);
-  for (const [k, v] of Object.entries(o.pkg.env ?? {})) process.env[k] = v;
-  process.env.TZAP = '1';
+async function init(ctx: HostContext): Promise<HostReady> {
+  const o = ctx.options;
+  pkgRoot = ctx.pkgRoot;
+  progress = ctx.progress;
 
   const require = createRequire(path.join(pkgRoot, 'package.json'));
   let jestPath: string;
@@ -90,7 +89,7 @@ async function init(o: SessionOptions): Promise<void> {
     }
     if (!alive) rmSync(path.join(shimDir, f), { force: true });
   }
-  envShim =path.join(shimDir, `jest-environment-${process.pid}.cjs`);
+  envShim = path.join(shimDir, `jest-environment-${process.pid}.cjs`);
   writeFileSync(
     envShim,
     `const m = require(${JSON.stringify(project.testEnvironment)});\n` +
@@ -125,7 +124,12 @@ async function init(o: SessionOptions): Promise<void> {
   delete raw.projects;
   config = JSON.stringify(raw);
 
-  send({ type: 'ready', runnerVersion: version });
+  // Jest gives every test file a module registry of its own, on every run.
+  return { executor: { run, close }, version, isolatesFiles: true };
+}
+
+async function close(): Promise<void> {
+  rmSync(envShim, { force: true });
 }
 
 async function run(req: RunRequest): Promise<RunResult> {
@@ -141,7 +145,7 @@ async function run(req: RunRequest): Promise<RunResult> {
     rootDir,
     tests: [],
     staticHits: new Map(),
-    progress: (test, mutant) => send({ type: 'progress', runId: req.id, test, mutant }),
+    progress: (test, mutant, done) => progress?.(req.id, test, mutant, done),
   };
   (globalThis as unknown as Record<string, unknown>)[STATE_KEY] = state;
   const tests: TestOutcome[] = [];
@@ -204,26 +208,4 @@ async function run(req: RunRequest): Promise<RunResult> {
   return { id: req.id, tests, files, durationMs: performance.now() - started };
 }
 
-process.on('message', (msg: HostRequest) => {
-  void (async () => {
-    try {
-      if (msg.type === 'init') await init(msg.options);
-      else if (msg.type === 'run') send({ type: 'result', result: await run(msg.request) });
-      else if (msg.type === 'close') {
-        try {
-          rmSync(envShim, { force: true });
-        } catch {
-          // best effort
-        }
-        process.exit(0);
-      }
-    } catch (e) {
-      const err = e as Error;
-      send({ type: 'error', message: `${err.message}\n${err.stack ?? ''}`, during: msg.type === 'init' ? 'init' : 'run' });
-    }
-  })();
-});
-
-process.on('unhandledRejection', (e) => {
-  send({ type: 'error', message: `unhandled rejection in the Jest host: ${String((e as Error)?.stack ?? e)}`, during: 'background' });
-});
+serveHost({ label: 'the Jest host', progressName: 'jest', init });

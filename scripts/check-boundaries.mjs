@@ -21,10 +21,10 @@ const RULES = {
   git: { allow: ['@tzap/model'] },
   report: { allow: ['@tzap/model', 'mutation-testing-elements'] },
   discover: { allow: ['@tzap/model', 'tinyglobby', 'yaml'] },
-  'runner-vitest': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime'] },
+  'runner-vitest': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime', '@tzap/runner-kit'] },
   'runner-kit': { allow: ['@tzap/model', '@tzap/protocol'] },
   'runner-node': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime', '@tzap/runner-kit'] },
-  'runner-jest': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime'] },
+  'runner-jest': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime', '@tzap/runner-kit'] },
   'runner-mocha': { allow: ['@tzap/model', '@tzap/protocol', '@tzap/runtime', '@tzap/runner-kit'] },
   typecheck: { allow: ['@tzap/model', '@tzap/instrument', '@tzap/protocol'] },
 };

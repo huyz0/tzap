@@ -100,6 +100,10 @@ export class Executor {
   readonly rt: TzapRuntime;
   readonly version: string;
   readonly allFiles: string[];
+
+  listFiles(): string[] {
+    return this.allFiles;
+  }
   running = false;
   private readonly pkgRoot: string;
   private readonly cli: MochaCli;

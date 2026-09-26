@@ -151,7 +151,6 @@ export type HostResponse =
   | { type: 'ready'; runnerVersion: string; isolatesFiles?: boolean; threads?: boolean }
   | { type: 'result'; result: RunResult }
   | { type: 'files'; files: string[] }
-  | { type: 'progress'; runId: number; test: string; mutant: number }
   | { type: 'error'; message: string; during: 'init' | 'run' | 'background' };
 
 /** Whether two runs of a test hit the same sites the same number of times (hits as `TestOutcome.hits`). */

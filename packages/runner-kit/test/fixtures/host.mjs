@@ -6,12 +6,11 @@ import { serveHost } from '../../dist/index.js';
 serveHost({
   label: 'the test host',
   progressName: 'kit-test',
-  needs: 'nothing',
-  init(o, _pkgRoot, progress) {
+  init({ options: o, progress }) {
     const env = process.env;
     if (env.KIT_FAIL_INIT) throw new Error('cannot start');
     const executor = {
-      get allFiles() {
+      listFiles() {
         if (env.KIT_DIE_ON_LIST) process.exit(3);
         return ['a.test.js'];
       },
@@ -27,6 +26,6 @@ serveHost({
         writeFileSync(path.join(o.tmpDir, `closed-${process.pid}`), '');
       },
     };
-    return { executor, version: '1.2.3' };
+    return { executor, version: '1.2.3', ...(env.KIT_READY_EXTRA ? { isolatesFiles: true, threads: true } : {}) };
   },
 });

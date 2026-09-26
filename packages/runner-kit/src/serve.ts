@@ -12,9 +12,31 @@ import { progressDir } from './session.js';
 /** What a hosted runner's executor offers the host. */
 export interface HostedExecutor {
   run(request: RunRequest): Promise<RunResult>;
-  readonly allFiles: string[];
+  /** Every test file the runner would run. Absent: the runner cannot list them. */
+  listFiles?(): string[] | Promise<string[]>;
   /** The runner's own teardown, when the host is asked to close. */
   close?(): Promise<void>;
+}
+
+/** What `init` hands the runner. */
+export interface HostContext {
+  options: SessionOptions;
+  /** The package directory, now the working directory. */
+  pkgRoot: string;
+  /** Records the start and end of each try, synchronously, in this process's progress file. */
+  progress: ReturnType<typeof progressWriter>;
+  /** The directory the session reads progress files from: workers of the runner may write there too. */
+  progressDir: string;
+}
+
+/** A started runner, and what the session learns about it. */
+export interface HostReady {
+  executor: HostedExecutor;
+  version: string;
+  /** Every test file gets fresh module state on every run. */
+  isolatesFiles?: boolean;
+  /** The runner took worker threads (SessionOptions.preferThreads). */
+  threads?: boolean;
 }
 
 export interface HostSetup {
@@ -22,10 +44,10 @@ export interface HostSetup {
   label: string;
   /** As the session's `HostedRunner.progressName`. */
   progressName: string;
-  /** Why the runner needs Node 22.15: named in the error on an older Node. */
-  needs: string;
-  /** Builds the executor, in the package directory with the package's environment set. */
-  init(o: SessionOptions, pkgRoot: string, progress: ReturnType<typeof progressWriter>): { executor: HostedExecutor; version: string };
+  /** Why the runner needs Node 22.15, named in the error on an older Node; absent when it does not. */
+  needs?: string;
+  /** Starts the runner, in the package directory with the package's environment set. */
+  init(context: HostContext): HostReady | Promise<HostReady>;
   /**
    * An error nothing handled, raised while no run is active or by the runner itself: return true
    * when the runner deals with it (a running test fails with it), false to report it.
@@ -38,27 +60,28 @@ export function serveHost(setup: HostSetup): void {
   const send = (m: HostResponse) => process.send?.(m);
   let executor: HostedExecutor | undefined;
 
-  const init = (o: SessionOptions) => {
+  const init = async (options: SessionOptions) => {
     const [major, minor] = process.versions.node.split('.').map(Number) as [number, number];
-    if (major < 22 || (major === 22 && minor < 15)) throw new Error(`${setup.label} needs Node >= 22.15 (${setup.needs}); this is ${process.version}`);
-    const pkgRoot = path.resolve(o.root, o.pkg.root);
+    if (setup.needs && (major < 22 || (major === 22 && minor < 15))) throw new Error(`${setup.label} needs Node >= 22.15 (${setup.needs}); this is ${process.version}`);
+    const pkgRoot = path.resolve(options.root, options.pkg.root);
     process.chdir(pkgRoot);
-    for (const [k, v] of Object.entries(o.pkg.env ?? {})) process.env[k] = v;
+    for (const [k, v] of Object.entries(options.pkg.env ?? {})) process.env[k] = v;
     process.env.TZAP = '1';
     // Written synchronously as each try starts and ends, so a try that blocks this thread for
     // good is on record for the session, which reads the file.
-    const progress = progressWriter(progressDir(o.tmpDir, setup.progressName, process.pid), String(process.pid));
-    const made = setup.init(o, pkgRoot, progress);
-    executor = made.executor;
-    send({ type: 'ready', runnerVersion: made.version });
+    const dir = progressDir(options.tmpDir, setup.progressName, process.pid);
+    const progress = progressWriter(dir, String(process.pid));
+    const ready = await setup.init({ options, pkgRoot, progress, progressDir: dir });
+    executor = ready.executor;
+    send({ type: 'ready', runnerVersion: ready.version, ...(ready.isolatesFiles ? { isolatesFiles: true } : {}), ...(ready.threads ? { threads: true } : {}) });
   };
 
   process.on('message', (msg: HostRequest) => {
     void (async () => {
       try {
-        if (msg.type === 'init') init(msg.options);
+        if (msg.type === 'init') await init(msg.options);
         else if (msg.type === 'run') send({ type: 'result', result: await executor!.run(msg.request) });
-        else if (msg.type === 'list') send({ type: 'files', files: executor!.allFiles });
+        else if (msg.type === 'list') send({ type: 'files', files: await (executor!.listFiles?.() ?? []) });
         else if (msg.type === 'close') {
           await executor?.close?.();
           process.exit(0);

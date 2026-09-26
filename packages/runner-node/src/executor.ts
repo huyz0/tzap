@@ -145,6 +145,10 @@ export class Executor {
   private state: RunState | undefined;
   readonly allFiles: string[];
 
+  listFiles(): string[] {
+    return this.allFiles;
+  }
+
   constructor(private readonly o: ExecutorOptions) {
     this.pkgRoot = o.pkgRoot;
     this.testTimeout = o.testTimeout ?? DEFAULT_TEST_TIMEOUT;

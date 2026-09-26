@@ -37,7 +37,7 @@ describe('HostedSession', () => {
     const s = new HostedSession(runner(), options());
     expect(s.kind).toBe('test');
     expect(await s.start()).toEqual({ runnerVersion: '1.2.3' });
-    expect(await s.listFiles()).toEqual(['a.test.js']);
+    expect(await s.listFiles!()).toEqual(['a.test.js']);
     const a = await s.run({ id: 1, mode: 'coverage' });
     const b = await s.run({ id: 2, mode: 'coverage' });
     expect(a.id).toBe(1);
@@ -55,6 +55,25 @@ describe('HostedSession', () => {
     expect(pidOf(b)).not.toBe(pidOf(a));
     await eventually(() => existsSync(path.join(scratch, `closed-${pidOf(a)}`)));
     await s.close();
+  });
+
+  it('keeps one host for isolated runs when the runner isolates test files itself', async () => {
+    const s = new HostedSession(runner({ isolatesItself: true }), options({}, { isolate: true }));
+    await s.start();
+    const a = await s.run({ id: 1, mode: 'static' });
+    const b = await s.run({ id: 2, mode: 'static' });
+    expect(pidOf(b)).toBe(pidOf(a));
+    await s.close();
+  });
+
+  it('reports what the host and the runner say about isolation and threads', async () => {
+    const s = new HostedSession(runner({ staticPerFile: true }), options({ KIT_READY_EXTRA: '1' }));
+    expect(await s.start()).toEqual({ runnerVersion: '1.2.3', isolatesFiles: true, threads: true, staticPerFile: true });
+    await s.close();
+  });
+
+  it('offers no listing for a runner that cannot list its files', () => {
+    expect(new HostedSession(runner({ lists: false }), options()).listFiles).toBeUndefined();
   });
 
   it('replaces a warm host its runner says is spent', async () => {
@@ -81,8 +100,8 @@ describe('HostedSession', () => {
   it('rejects what was waiting on a host that dies, instead of waiting forever', async () => {
     const s = new HostedSession(runner(), options({ KIT_DIE_ON_LIST: '1' }));
     await s.start();
-    await expect(s.listFiles()).rejects.toThrow(/the test host exited \(code 3/);
-    await expect(s.listFiles()).rejects.toThrow(/not running/);
+    await expect(s.listFiles!()).rejects.toThrow(/the test host exited \(code 3/);
+    await expect(s.listFiles!()).rejects.toThrow(/not running/);
     await s.close();
   });
 

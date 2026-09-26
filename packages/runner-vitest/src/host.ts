@@ -8,15 +8,8 @@ import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { FileOutcome, HostRequest, HostResponse, RunRequest, RunResult, SessionOptions, TestOutcome } from '@tzap/protocol';
-import { PROGRESS_DIR_ENV, sameHits } from '@tzap/protocol';
-
-const send = (m: HostResponse) => process.send?.(m);
-
-const norm = (p: string) => {
-  const s = p.replace(/\\/g, '/');
-  return process.platform === 'win32' ? s.toLowerCase() : s;
-};
+import { normPath as norm, PROGRESS_DIR_ENV, sameHits, type FileOutcome, type RunRequest, type RunResult, type TestOutcome } from '@tzap/protocol';
+import { serveHost, type HostContext, type HostReady } from '@tzap/runner-kit';
 
 interface Instrumented {
   [absPath: string]: { code: string; map: unknown };
@@ -50,13 +43,9 @@ type TestCase = {
 
 let vitest: Vitest | undefined;
 
-async function init(o: SessionOptions): Promise<void> {
-  const pkgRoot = path.resolve(o.root, o.pkg.root);
-  process.chdir(pkgRoot);
-  for (const [k, v] of Object.entries(o.pkg.env ?? {})) process.env[k] = v;
-  process.env.TZAP = '1';
+async function init({ options: o, pkgRoot, progressDir }: HostContext): Promise<HostReady> {
   // Workers, threads or forks, inherit this and write their progress files there.
-  process.env[PROGRESS_DIR_ENV] = path.join(o.tmpDir, `progress-${process.pid}`);
+  process.env[PROGRESS_DIR_ENV] = progressDir;
   // What the vitest CLI sets before it loads a config; plugins read these in their config hooks
   // (@testing-library/svelte adds the `browser` condition only when VITEST is set).
   process.env.TEST = 'true';
@@ -168,11 +157,20 @@ async function init(o: SessionOptions): Promise<void> {
   vitest = await createVitest('test', cliOptions, { plugins: [plugin] });
   (vitest as { version?: string }).version = vitestPkg.version;
 
-
   // With isolation on (Vitest's default), every run re-imports each test file's modules, so this
   // same session can decide static mutants without a second, isolated one.
   const isolate = (vitest as unknown as { config: { isolate?: boolean } }).config.isolate !== false;
-  send({ type: 'ready', runnerVersion: vitestPkg.version, isolatesFiles: isolate && o.isolate !== false, threads });
+  const v = vitest;
+  return {
+    executor: {
+      run,
+      listFiles: async () => [...new Set((await v.globTestSpecifications()).map((spec) => spec.moduleId))],
+      close: () => v.close(),
+    },
+    version: vitestPkg.version,
+    isolatesFiles: isolate && o.isolate !== false,
+    threads,
+  };
 }
 
 const CONFIG_NAMES = ['vitest.config', 'vite.config'].flatMap((b) => ['ts', 'mts', 'cts', 'js', 'mjs', 'cjs'].map((e) => `${b}.${e}`));
@@ -315,26 +313,7 @@ async function run(req: RunRequest): Promise<RunResult> {
   return out;
 }
 
-process.on('message', (msg: HostRequest) => {
-  void (async () => {
-    try {
-      if (msg.type === 'init') await init(msg.options);
-      else if (msg.type === 'run') send({ type: 'result', result: await run(msg.request) });
-      else if (msg.type === 'list') send({ type: 'files', files: [...new Set((await vitest!.globTestSpecifications()).map((s) => s.moduleId))] });
-      else if (msg.type === 'close') {
-        await vitest?.close();
-        process.exit(0);
-      }
-    } catch (e) {
-      const err = e as Error;
-      send({ type: 'error', message: `${err.message}\n${err.stack ?? ''}`, during: msg.type === 'init' ? 'init' : 'run' });
-    }
-  })();
-});
-
-process.on('unhandledRejection', (e) => {
-  send({ type: 'error', message: `unhandled rejection in the Vitest host: ${String((e as Error)?.stack ?? e)}`, during: 'background' });
-});
+serveHost({ label: 'the Vitest host', progressName: 'vitest', init });
 
 /** Whether a process with this id exists. */
 function alive(pid: number): boolean {

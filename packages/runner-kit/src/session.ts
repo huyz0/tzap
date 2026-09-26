@@ -24,7 +24,19 @@ export interface HostedRunner {
   progressName: string;
   /** Whether a warm host that has run `tries` tries must be replaced before running `next` more. */
   recycle?: (tries: number, next: number) => boolean;
+  /**
+   * The runner gives every test file fresh modules itself when the session asks for isolation, so
+   * one host serves every isolated run; otherwise each isolated run gets a host of its own.
+   */
+  isolatesItself?: boolean;
+  /** The host can activate a different static mutant in each test file (RunRequest.staticPlan). */
+  staticPerFile?: boolean;
+  /** The host can list the runner's test files. */
+  lists?: boolean;
 }
+
+/** What a started session reports: RunnerSession.start's result. */
+export type SessionInfo = Awaited<ReturnType<RunnerSession['start']>>;
 
 /** Keep this much of a host's stderr, for the message when it dies. */
 const STDERR_TAIL = 8000;
@@ -42,8 +54,8 @@ class ProcessHost {
   readonly child: ChildProcess;
   private stderr = '';
   private exited = false;
-  ready: Promise<string>;
-  private onReady: { resolve: (v: string) => void; reject: (e: Error) => void } | undefined;
+  ready: Promise<SessionInfo>;
+  private onReady: { resolve: (v: SessionInfo) => void; reject: (e: Error) => void } | undefined;
   private pending: { resolve: (r: RunResult) => void; reject: (e: Error) => void } | undefined;
   private listing: { resolve: (files: string[]) => void; reject: (e: Error) => void } | undefined;
   used = false;
@@ -82,7 +94,7 @@ class ProcessHost {
   private onMessage(m: HostResponse): void {
     switch (m.type) {
       case 'ready':
-        this.onReady?.resolve(m.runnerVersion);
+        this.onReady?.resolve({ runnerVersion: m.runnerVersion, ...(m.isolatesFiles ? { isolatesFiles: true } : {}), ...(m.threads ? { threads: true } : {}) });
         this.onReady = undefined;
         break;
       case 'files':
@@ -169,19 +181,26 @@ export class HostedSession implements RunnerSession {
     private readonly options: SessionOptions,
   ) {
     this.kind = runner.kind;
+    if (runner.lists !== false) this.listFiles = () => (this.host ? this.host.list() : Promise.reject(new Error(`${runner.label} is not running`)));
   }
 
-  async start(): Promise<{ runnerVersion: string }> {
+  async start(): Promise<SessionInfo> {
     this.host = new ProcessHost(this.runner, this.options);
-    return { runnerVersion: await this.host.ready };
+    const info = await this.host.ready;
+    return this.runner.staticPerFile ? { ...info, staticPerFile: true } : info;
+  }
+
+  /** Whether the next isolated run needs a host that has never run anything. */
+  private get hostPerRun(): boolean {
+    return this.options.isolate === true && !this.runner.isolatesItself;
   }
 
   /** A host ready for the next run: a fresh one when isolating, when the last one died, or when the warm one is spent. */
   private async hostForRun(request: RunRequest): Promise<ProcessHost> {
     let host = this.host!;
     const tries = Object.values(request.plan ?? {}).reduce((a, l) => a + l.length, 0);
-    const spent = !this.options.isolate && this.tries > 0 && this.runner.recycle?.(this.tries, tries) === true;
-    if (!host.alive || (this.options.isolate && host.used) || spent) {
+    const spent = !this.hostPerRun && this.tries > 0 && this.runner.recycle?.(this.tries, tries) === true;
+    if (!host.alive || (this.hostPerRun && host.used) || spent) {
       host.kill();
       host = this.host = new ProcessHost(this.runner, this.options);
       this.tries = 0;
@@ -191,10 +210,8 @@ export class HostedSession implements RunnerSession {
     return host;
   }
 
-  listFiles(): Promise<string[]> {
-    if (!this.host) return Promise.reject(new Error(`${this.runner.label} is not running`));
-    return this.host.list();
-  }
+  /** Absent when the runner cannot list its test files. */
+  readonly listFiles?: () => Promise<string[]>;
 
   async run(request: RunRequest): Promise<RunResult> {
     if (!this.host) throw new Error(`${this.runner.label} is not running`);
@@ -225,7 +242,7 @@ export class HostedSession implements RunnerSession {
       return await host.run(request);
     } finally {
       if (timer) clearInterval(timer);
-      if (this.options.isolate && this.host === host) {
+      if (this.hostPerRun && this.host === host) {
         // Start the next run's host now, while the engine digests this result. The used one
         // closes in the background, so its runner's teardown still runs.
         void host.close();

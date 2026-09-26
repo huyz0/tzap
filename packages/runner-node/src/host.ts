@@ -8,7 +8,7 @@ serveHost({
   label: 'the node:test host',
   progressName: 'node-test',
   needs: "module.registerHooks, run() with isolation 'none'",
-  init(o, pkgRoot, progress) {
+  init({ options: o, pkgRoot, progress }) {
     const timeout = Number(process.env.TZAP_NODE_TEST_TIMEOUT);
     const executor = new Executor({
       session: o,

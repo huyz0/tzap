@@ -2,5 +2,5 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "rootDir": "src", "outDir": "dist", "tsBuildInfoFile": "dist/.tsbuildinfo" },
   "include": ["src"],
-  "references": [{ "path": "../model" }, { "path": "../protocol" }, { "path": "../runtime" }]
+  "references": [{ "path": "../model" }, { "path": "../protocol" }, { "path": "../runtime" }, { "path": "../runner-kit" }]
 }

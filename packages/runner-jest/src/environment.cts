@@ -225,7 +225,7 @@ function extend(Base: Env): Env {
         test.errors.push(SKIP_ERROR);
         return;
       }
-      run.progress(rec.id, tr.m);
+      run.progress(rec.id, tr.m, false);
       beginTry(this.rt, run.mode === 'static' ? run.staticMutant : tr.m, tr.N, tr.L);
     }
 
@@ -255,6 +255,7 @@ function extend(Base: Env): Env {
         if (tr) {
           const reached = this.rt.n > 0;
           const { hung } = endTry(this.rt);
+          run.progress(rec.id, tr.m, true);
           if (run.mode === 'static') runtime.activateStatic(this.rt, run.staticMutant, run.staticLimit);
           if (i === 0) rec.duration = performance.now() - rec.started;
           const msg = failed ? message(test.errors[0]) : undefined;
