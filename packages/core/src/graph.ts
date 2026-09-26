@@ -99,6 +99,21 @@ interface StmtNode {
  * top-level statement run for its side effect. A module of functions, classes and constant
  * primitives cannot hold state; nearly anything else might.
  */
+const TEST_APIS = new Set(['describe', 'it', 'test', 'suite', 'bench', 'beforeEach', 'afterEach', 'beforeAll', 'afterAll', 'before', 'after', 'context', 'specify', 'xit', 'xdescribe', 'fit', 'fdescribe']);
+
+/** `describe(...)`, `it.each(...)(...)`, `vi.mock(...)`: a test file registering tests or mocks. */
+function isTestRegistration(e: StmtNode | undefined): boolean {
+  let n = e;
+  while (n && n.type === 'CallExpression') n = n.callee as StmtNode;
+  while (n && n.type === 'MemberExpression') {
+    const obj = n.object as StmtNode;
+    if (obj.type === 'Identifier' && (obj.name === 'vi' || obj.name === 'jest')) return true;
+    n = obj;
+    while (n && n.type === 'CallExpression') n = n.callee as StmtNode;
+  }
+  return !!n && n.type === 'Identifier' && TEST_APIS.has(n.name as string);
+}
+
 export function mayHoldState(program: { body: StmtNode[] }): boolean {
   const statelessInit = (init: StmtNode | null | undefined): boolean => {
     if (!init) return true;
@@ -115,6 +130,11 @@ export function mayHoldState(program: { body: StmtNode[] }): boolean {
         return !hasStaticState(init);
       case 'UnaryExpression':
         return statelessInit(init.argument as StmtNode);
+      case 'BinaryExpression':
+      case 'LogicalExpression':
+        return statelessInit(init.left as StmtNode) && statelessInit(init.right as StmtNode);
+      case 'ConditionalExpression':
+        return statelessInit(init.test as StmtNode) && statelessInit(init.consequent as StmtNode) && statelessInit(init.alternate as StmtNode);
       case 'TSAsExpression':
       case 'TSSatisfiesExpression':
         return statelessInit(init.expression as StmtNode);
@@ -150,8 +170,9 @@ export function mayHoldState(program: { body: StmtNode[] }): boolean {
         return !statelessInit(d);
       }
       case 'ExpressionStatement':
-        // "use strict" is a directive, not an effect.
-        return typeof s.directive !== 'string';
+        // "use strict" is a directive, not an effect; registering tests is not module state.
+        if (typeof s.directive === 'string') return false;
+        return !isTestRegistration(s.expression as StmtNode);
       default:
         return true;
     }

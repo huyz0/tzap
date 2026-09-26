@@ -43,6 +43,39 @@ located the waste precisely: Stryker pays runner boot per mutant, has no bail in
 the whole suite's dry run for a one-line change. If tzap cannot recover a large multiple of that,
 the thesis is wrong. Record the measurement either way.
 
+## Delivery status
+
+Where every milestone stands, as built. The milestone text below is the plan as written before
+building; what building it changed is recorded at the end rather than edited in.
+
+| Milestone | Status |
+|---|---|
+| M0 Skeleton & CI | **Done**, CI unrun: workspace, boundary check against imports, zero-import runtime, pack-and-install smoke test; the CI workflow is written but the repository has no remote yet |
+| M1 Risk spikes | **Done**: [A](spikes/A-vitest-rerun.md) Vitest (found the `repeats` path, ~56 µs/try), [B](spikes/B-jest-warm.md) Jest (jest-circus retry loop), C transparency (a sweep of 696,278 mutants over 2,536 files, all parsing), D static mutants (packed per-file runs), E TypeScript 7 (unstable API, 5 ms/mutant grouped) |
+| M2 Model, discovery, CLI | **Done**: schema v1, validation with field-level messages, pnpm/npm/yarn workspaces, root `test.projects`, `--dry-run` |
+| M3 Inventory | **Done**: Stryker's seventeen mutators under Stryker's names, disable comments, stable ids, hand-written expectations |
+| M4 Parity harness (inventory) | **Done**: `tools/parity`, Tier A and three Tier B libraries pinned by commit, gate in both directions |
+| M5 Instrumentation + Vitest + coverage | **Done**: schemata by span splicing, runtime shim, Vite plugin delivery, per-test coverage run twice |
+| M6 Reference kill loop | **Done**: `--engine reference`; parity 97–99.9% on real libraries, every difference classified |
+| M7 Bench harness | **Done**: `tools/bench`, S1/S3/S4/S5/S6/S9; S2/S7/S8 declared; RSS and CPU-seconds not yet collected |
+| M8a/b Warm pool, schemata switching | **Done** differently: many mutants per runner invocation through the runner's own repeat/retry loop, instead of a worker pool the engine owns |
+| M9 Selection, ordering, hangs | **Done**: covering tests only, previous killer first, early exit everywhere, loop and hit counting, silence backstop |
+| M10 Static mutants | **Done**: packed one per test file per run, parallel lanes, load-time loop limits |
+| M11 Incremental cache | **Done**: import-closure keys, static survivors reusable; S5 0.30 s |
+| M12 Type-aware viability | **Done**: `--typecheck`, grouped checking, measured syntactic rules |
+| M13 Reduction and noise | **Done**: arid logging rules on by default; `--dedup`, `--one-per-line`, `--extreme` with detection loss |
+| M14 Diff scoping | **Done**: git and patch scoping, coverage narrowed to tests that can import the change |
+| M15 Reporters + 0.1 | **Done** except publishing: eight reporters; the package is bundled and smoke-tested from its tarball; `npm publish` needs the owner's account |
+| M16 node:test | **Done** |
+| M17 Jest | **Done** (Jest 30; 29 refused with a message) |
+| M18 Mocha; Bun/Deno | **Done**: Mocha 12; [Bun and Deno: not now](spikes/C-bun-deno.md) |
+| M19 Frontend | **Done** for React/TSX, Vue, Svelte under jsdom; Angular templates and Astro not |
+| M20 Monorepo | **Done** |
+| M21 Daemon/watch | **Closed by measurement**: a warm-cache diff run takes 0.19 s in all |
+| M22 Native instrumenter | **Closed by measurement**: tzap's own CPU work is 0.3% of a run |
+| M23 Published comparison | **Done** for StrykerJS on the fixtures and corpus here; no third-party reproduction yet |
+| M24 1.0 hardening | **Partly**: docs, compatibility, versioning, diagnostics, GitHub Action, agent skill; not published, no 30-day external dogfood |
+
 ## Release train
 
 | Release | After | Contents |
@@ -765,12 +798,37 @@ exist for ordering, not promising dates.
 - M21 and M22 are closed by measurement if their gates are not met; that is a result, not a
   failure, and is recorded here with the numbers.
 
-## How this plan will change
+## What building it changed
 
-jzap's plan was edited by building it, and the differences were recorded rather than silently
-applied — that record is the most useful part of its plan. This plan keeps a
-**"What building it changed"** section, appended as milestones close. Expected candidates, named
-now so they are recognised when they happen: Spike A redirecting the Vitest adapter to
-`@vitest/runner`; Spike B shrinking Jest's scope; the transparency gate forcing some construct
-out of instrumentation; the arid rules turning out to matter more than any speed work, as Google's
-numbers suggest they might.
+Recorded here rather than silently edited in, because the differences are the useful part.
+
+- **The engine does not own a worker pool.** The plan's M8 assumed tzap would host each runner's
+  internals in its own workers. Spike A found something better: Vitest's `repeats` loop runs a
+  test's full hook cycle per repetition and does not stop on failure, so one ordinary run of the
+  user's own runner can try thousands of mutants through public hooks. Jest (jest-circus's retry
+  loop) and Mocha (its retries) turned out to have the same shape; node:test needed a shim. The
+  per-try cost is 37–180 µs in every runner, and no runner internals are imported.
+- **Warm reuse needed four defences the plan did not foresee, each found by a fixture or a real
+  library disagreeing with the reference engine:** control tries around mutant tries; the
+  unreached outcome (a try whose mutant never ran decides nothing); running every test twice in
+  coverage to catch tests that depend on leftover state; and confirming warm survivors in
+  isolation when their tests touch module state — on superjson, 14 of 82 warm survivors had been
+  masked by a registration an earlier run of the same test left behind.
+- **A shortcut was built and removed.** Letting the warm engine try hybrid static mutants first
+  looked sound — a kill is a kill — until a test that compares against a value computed at load
+  time showed a false kill. The hazards fixture now holds that case.
+- **Static mutants were the dominant cost, as the research predicted:** 98% of a dogfood run on
+  tzap's own sources. Packing one static mutant per test file per run, with measured load-time
+  loop limits, took that run from 4 min 4 s to 52 s.
+- **The oracle paid for itself.** StrykerJS comparison found three tzap bugs (Vitest 4.1
+  reporters, logical-chain precedence, uncaught exceptions reported as survivals) and then a
+  regression in the fix for the second, which is why the instrumenter now re-parses its own output.
+- **The S3 kill criterion was set for a suite whose dry run is expensive.** On the benchmark
+  fixture, StrykerJS's full dry run costs 0.4 s, and tzap's fixed floor (a runner boot and a
+  coverage pass) dominates a 10-line diff. It is recorded as unmet rather than re-scoped; a diff
+  benchmark on a corpus project with a real suite is the measurement that would settle it.
+- **M21 and M22 were closed by measurement**, as the plan allowed: the warm-cache path is already
+  0.19 s, and tzap's own CPU work is 0.3% of a run.
+- **Tools that are not the product needed the most care about Windows**: NUL bytes and
+  backspaces from scripted edits, CRLF line endings, a pnpm policy that silently stopped builds,
+  and TypeScript 7's incremental build missing an edit (the build now always forces).

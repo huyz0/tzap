@@ -1,21 +1,26 @@
 # tzap documentation
 
-tzap is a planned fast, diff-aware mutation testing tool for TypeScript and JavaScript, the
-sibling of [jzap](https://github.com/huyz0/jzap) for Java and Kotlin. Nothing is built yet; these
-documents are the research and the plan.
+Fast, diff-aware mutation testing for TypeScript and JavaScript; the sibling of
+[jzap](https://github.com/huyz0/jzap) for Java and Kotlin.
 
-Read in this order:
+Using it:
 
-1. [research/README.md](research/README.md) — what the research found and the decisions it forces
-2. [adr/0001-implementation-language.md](adr/0001-implementation-language.md) — TypeScript on Node, oxc for parsing, no Rust core in v1
-3. [architecture.md](architecture.md) — the engine, the project-model seam, execution, soundness gates
-4. [parity-and-benchmarks.md](parity-and-benchmarks.md) — StrykerJS as the oracle; corpus, triage, scenarios
-5. [delivery-plan.md](delivery-plan.md) — 25 milestones in 7 phases, with definitions of done and kill criteria
+- [usage.md](usage.md) — install, run, scope to a diff, reports, the cache, monorepos, CI, agents
+- [mutators.md](mutators.md) — the mutators, what is never mutated, disable comments, arid rules, reductions
+- [troubleshooting.md](troubleshooting.md) — the failures people hit
+- [compatibility.md](compatibility.md) — runners, Node versions, frameworks, as tested
+- [versioning.md](versioning.md) — what counts as a breaking change
 
-Research notes, each with sources and measured numbers:
+Where it stands:
 
-- [research/stryker-js.md](research/stryker-js.md) — StrykerJS 10 internals and where its time goes
-- [research/landscape.md](research/landscape.md) — other tools, fast engines elsewhere, literature, type-invalid mutants measured
-- [research/runtime-and-execution.md](research/runtime-and-execution.md) — Node/Vitest/Jest execution costs, measured on Node 26
-- [research/toolchain-and-language.md](research/toolchain-and-language.md) — parsers, codegen, TypeScript 7, packaging, mutant identity
-- [research/bench/](research/bench/) — parser and instrumenter benchmark scripts
+- [status.md](status.md) — what works, what was measured, what is not built, known limitations
+- [performance.md](performance.md) — every published number and how it was taken
+- [parity-and-benchmarks.md](parity-and-benchmarks.md) — the StrykerJS oracle and the benchmark design
+
+How it was built, and why:
+
+- [research/README.md](research/README.md) — the research and the decisions it forced
+- [adr/0001-implementation-language.md](adr/0001-implementation-language.md) — TypeScript on Node, oxc for parsing
+- [architecture.md](architecture.md) — the engine, the project-model seam, soundness gates
+- [delivery-plan.md](delivery-plan.md) — the milestones, their status, and what building them changed
+- [spikes/](spikes/) — Vitest (A), Jest (B), Bun and Deno (C)
