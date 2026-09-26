@@ -5,3 +5,4 @@ dist/
 reports/
 *.log
 *.tsbuildinfo
+.tzap-test-tmp/
