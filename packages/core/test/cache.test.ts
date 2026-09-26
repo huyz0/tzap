@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AnalysisResult, MutantDescriptor, MutantResult, ProjectModel } from '@tzap/model';
 import { loadCache, saveCache, type CacheSettings } from '../src/cache.js';
-import type { MutantCoverage } from '../src/engine.js';
+import type { MutantCoverage } from '../src/engine/options.js';
 
 const dirs: string[] = [];
 afterEach(() => {

@@ -20,7 +20,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { globSync } from 'tinyglobby';
 import type { AnalysisResult, MutantDescriptor, MutantResult, ProjectModel, TestInfo } from '@tzap/model';
-import type { MutantCoverage } from './engine.js';
+import type { MutantCoverage } from './engine/options.js';
 
 const HEADER = '# tzap cache v1';
 const FILE_NAME = 'tzap-cache.txt';
