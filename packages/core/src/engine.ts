@@ -134,6 +134,15 @@ class Timer {
   }
 }
 
+/**
+ * Fastest-first ordering by measured duration, coarsely: durations jitter from run to run, and an
+ * order that follows the jitter changes which test is credited with a kill. Everything under 5 ms
+ * is one class; above that, one class per doubling.
+ */
+function speedClass(ms: number | undefined): number {
+  return ms === undefined || ms < 5 ? 0 : 1 + Math.floor(Math.log2(ms / 5));
+}
+
 const HIT_FACTOR = 100;
 const HIT_FLOOR = 1000;
 const LOOP_FACTOR = 10;
@@ -482,7 +491,7 @@ export async function analyse(model: ProjectModel, options: EngineOptions): Prom
             if (a.key === killer) return -1;
             if (b.key === killer) return 1;
           }
-          return (a.duration ?? 0) - (b.duration ?? 0) || (a.key < b.key ? -1 : 1);
+          return speedClass(a.duration) - speedClass(b.duration) || (a.key < b.key ? -1 : 1);
         })
         .map((t) => t.key);
       const warmTests = ordered.filter((k) => !tests.get(k)!.stateSensitive);
