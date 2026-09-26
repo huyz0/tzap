@@ -6,7 +6,7 @@
   jest-circus + jest-runtime directly, or drive Jest through its public entry point?
 - **Environment:** Jest 30.5.2 (jest-circus, babel-jest + `@babel/preset-typescript` 7.29),
   Node 26.7.0, Windows 11, i5-13600KF. Fixture: [fixtures/sample-jest](../../fixtures/sample-jest)
-  (two test files, five tests). Code in [spikes/jest-warm/](../../spikes/jest-warm/).
+  (two test files, five tests). The spike's code is in commit a5e8147, under `spikes/jest-warm/`.
 
 ## Result
 

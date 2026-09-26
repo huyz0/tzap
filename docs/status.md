@@ -151,8 +151,11 @@ better read as 6–7x.
 ## Running the checks
 
 ```bash
-pnpm build && pnpm test                       # 200 tests, every runner, warm against reference
-node scripts/check-boundaries.mjs             # the package graph against the imports
+pnpm build && pnpm test                       # every runner, warm against reference
+pnpm check:boundaries                         # the package graph against the imports
+pnpm check:size                               # no file over 700 lines, no folder over 20 files
+pnpm coverage                                 # line coverage, workers and runner processes; gate 95%
+node packages/tzap/dist/bin.js run --model dogfood.model.json   # tzap on its own model, instrument and report
 node scripts/pack-smoke.mjs                   # the published package, from its tarball
 cd tools/parity && node compare.mjs           # the StrykerJS comparison (after run.mjs)
 node tools/bench/bench.mjs                    # the benchmark scenarios

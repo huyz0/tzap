@@ -3,8 +3,8 @@
 - **Date:** 2026-09-26
 - **Question:** what does it cost to run one test against one mutant in an already-warm
   Vitest 5, and should the adapter host Vitest or drive `@vitest/runner` directly?
-- **Environment:** Vitest 5.0.2, Node 26.7.0, Windows 11, i5-13600KF. Code in
-  [spikes/vitest-rerun/](../../spikes/vitest-rerun/).
+- **Environment:** Vitest 5.0.2, Node 26.7.0, Windows 11, i5-13600KF. The spike's code is in
+  commit e10fb34, under `spikes/vitest-rerun/` (`git show e10fb34:spikes/vitest-rerun/spike.mjs`).
 
 ## Result
 

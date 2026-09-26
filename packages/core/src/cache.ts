@@ -11,8 +11,9 @@
  *   of the files that load it) and none of their closures changed. Its verdict came from running
  *   those files, and may name a file or an unhandled error rather than a test.
  * - Never reused: a wall-clock Timeout (not reproducible) and RuntimeError.
- * The cache records the toolchain that wrote it (the settings that can change a verdict
- * included) and is ignored under a different one. A full run rewrites it whole; a diff run
+ * The cache records the toolchain that wrote it — the settings that can change a verdict, and a
+ * hash of the dependency, compiler and runner config files, which change how every test runs
+ * without changing any import closure — and is ignored under a different one. A full run rewrites it whole; a diff run
  * updates what it decided and keeps the rest.
  */
 import { createHash } from 'node:crypto';
@@ -88,9 +89,45 @@ export function fingerprint(model: ProjectModel): string {
   return h.digest('hex').slice(0, 24);
 }
 
+/**
+ * Files that change how every test runs, not what one test reaches: dependencies (manifests and
+ * lockfiles), compiler and transpiler settings, and runner configuration.
+ */
+const CONFIG_GLOBS = [
+  'package.json',
+  '{pnpm-lock.yaml,package-lock.json,npm-shrinkwrap.json,yarn.lock,bun.lock,bun.lockb}',
+  'tsconfig*.json',
+  '{vitest,vite,jest,babel}.config.*',
+  '{.mocharc.*,.babelrc,.babelrc.*,.swcrc,.npmrc}',
+];
+
+/** A hash over the config files at the model root and each package root, and the ones the model names. */
+function configHash(model: ProjectModel): string {
+  const root = path.resolve(model.root);
+  const files = new Set<string>();
+  for (const dir of new Set([root, ...model.packages.map((p) => path.resolve(root, p.root))])) {
+    for (const f of globSync(CONFIG_GLOBS, { cwd: dir, absolute: true, dot: true })) files.add(path.resolve(f));
+  }
+  for (const p of model.packages) {
+    for (const f of [p.tsconfig, p.runner?.config]) if (f) files.add(path.resolve(root, f));
+  }
+  const h = createHash('sha256');
+  for (const f of [...files].sort()) {
+    let content: Buffer | string;
+    try {
+      content = readFileSync(f);
+    } catch {
+      content = '(missing)';
+    }
+    h.update(path.relative(root, f).replace(/\\/g, '/')).update('\0').update(content).update('\n');
+  }
+  return h.digest('hex').slice(0, 16);
+}
+
 function toolchainOf(model: ProjectModel, s: CacheSettings): Record<string, string> {
   const t: Record<string, string> = {
     tzap: s.tzapVersion,
+    config: configHash(model),
     node: process.versions.node.split('.')[0]!,
     platform: process.platform,
     mutators: s.mutators ? [...s.mutators].sort().join(',') : 'all',

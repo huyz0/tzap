@@ -152,6 +152,19 @@ describe('the cache', () => {
     }
   });
 
+  it('is ignored once a dependency, compiler or runner config file changes', () => {
+    for (const file of ['pnpm-lock.yaml', 'tsconfig.json', 'vitest.config.ts', 'package.json']) {
+      const { root, model, dir } = setup();
+      writeFileSync(path.join(root, file), 'one\n');
+      saveCache(loadCache(dir, model, settings), result([{ ...mutant('m'), status: 'Killed', killedBy: ['p::t1'], coveredBy: ['p::t1'] }]));
+      expect(loadCache(dir, model, settings).entries.size, file).toBe(1);
+      writeFileSync(path.join(root, file), 'two\n');
+      const c = loadCache(dir, model, settings);
+      expect(c.entries.size, file).toBe(0);
+      expect(c.note).toMatch(/different toolchain \(config\)/);
+    }
+  });
+
   it('ignores a damaged file entirely, not just from the damage on', () => {
     const { model, dir } = setup();
     saveCache(loadCache(dir, model, settings), result([{ ...mutant('m'), status: 'Survived' }]));
