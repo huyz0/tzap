@@ -25,3 +25,12 @@ telling the truth for the first time; the notes say so when it is.
 Adding support for a runner, Node or TypeScript version is minor. Dropping one is major, except
 for versions their own maintainers no longer support, which may be dropped in a minor with a
 release note.
+
+## Releasing
+
+Releases are published by [.github/workflows/release.yml](../.github/workflows/release.yml) through
+npm trusted publishing: no token is stored, and npm records provenance linking each version to
+the commit and the workflow run that built it. Set the version in `packages/tzap/package.json`,
+merge, and push the tag `v<version>`: a pre-release version (`0.2.0-beta.1`) is published under
+the `next` dist-tag, any other under `latest`. The workflow runs the full check and the tarball
+smoke test first, and refuses a tag that does not match the version.

@@ -1,0 +1,72 @@
+name: release
+
+# Publishes @huyz0/tzap to npm through trusted publishing (OIDC): no token is stored anywhere.
+# npm exchanges this workflow's GitHub identity for a short-lived publish credential, and records
+# provenance linking the package to the commit and the run that built it.
+#
+# One-time setup on npmjs.com, package @huyz0/tzap → Settings → Trusted publishing → GitHub Actions:
+#   organization or user: huyz0, repository: tzap, workflow filename: release.yml,
+#   environment: npm
+#
+# To release: set the version in packages/tzap/package.json, merge, then push a tag `v<version>`.
+# A pre-release version (1.2.0-beta.1) goes to the `next` dist-tag, any other to `latest`. A manual
+# run publishes the version on the chosen ref under the dist-tag given.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dist-tag:
+        description: npm dist-tag to publish under
+        required: true
+        default: next
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Approval rules and the trusted-publisher binding both hang on this environment.
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write # the OIDC token npm exchanges for a publish credential
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install --global npm@11
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - name: Choose the version and dist-tag
+        id: meta
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.dist-tag }}
+        run: |
+          version=$(node -p "require('./packages/tzap/package.json').version")
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+              echo "::error::tag $GITHUB_REF_NAME does not match packages/tzap/package.json version $version"
+              exit 1
+            fi
+            case "$version" in *-*) tag=next ;; *) tag=latest ;; esac
+          else
+            tag=$REQUESTED_TAG
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Bundle, and smoke-test the package from its tarball
+        run: node scripts/pack-smoke.mjs
+      - name: Publish @huyz0/tzap@${{ steps.meta.outputs.version }} as ${{ steps.meta.outputs.tag }}
+        working-directory: dist-npm/tzap
+        env:
+          DIST_TAG: ${{ steps.meta.outputs.tag }}
+        run: npm publish --tag "$DIST_TAG"
