@@ -195,6 +195,7 @@ async function analyseIn(model: ProjectModel, options: EngineOptions, tmpDir: st
       ...facts,
       silenceMs: Math.max(15_000, 10 * Math.max(0, ...facts.green.map((t) => t.duration ?? 0)) + 5_000),
       total: placed.length,
+      siteFile: new Map(placed.map((d) => [d.site, d.file])),
     };
     const { covered, statics } = classify(run, placed, facts);
     emit({ type: 'progress', decided: decidedCount(run), total: run.total });

@@ -146,6 +146,10 @@ generated fixture measured the same before and after, verdict for verdict):
 - **Static mutants are tried in one file first.** Any file that loads the module kills a static
   mutant when it fails, so each is first run in its likeliest file, different mutants packed onto
   different files, and only survivors in the rest: remeda's five went from five runs to one.
+  The rest come in growing waves, the files whose tests call into the mutant's module before
+  the files that only load it, so a kill ends a mutant's waves early. On a module the whole
+  suite loads (a fluxion schema file, 380 test files) a static survivor of the first file had
+  cost a run of all 380 whether or not one of them killed it.
 
 What it shows:
 

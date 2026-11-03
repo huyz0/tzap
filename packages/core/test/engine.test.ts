@@ -22,6 +22,9 @@ beforeAll(() => {
   mkdirSync(path.join(root, 'test'));
   writeFileSync(path.join(root, 'src/math.js'), SOURCE);
   for (const f of ['a', 'b', 'c']) writeFileSync(path.join(root, `test/${f}.test.js`), `import * as m from '../src/math.js';\n`);
+  // test/s reaches module state: a registry a warm run of its tests can leave filled.
+  writeFileSync(path.join(root, 'test/registry.js'), 'export const registry = new Map();\n');
+  writeFileSync(path.join(root, 'test/s.test.js'), `import * as m from '../src/math.js';\nimport { registry } from './registry.js';\n`);
   mutants = instrument({ file: 'src/math.js', source: SOURCE, mutators: MUTATORS, firstMutant: 0, firstSite: 0 }).mutants;
   expect(mutants.map((m) => m.original)).toEqual(['a + b', 'a - b', 'a * b', 'a / b']);
 });
@@ -40,6 +43,11 @@ async function run(script: Script, options: Partial<EngineOptions> = {}) {
   const verdict = (fn: Parameters<typeof at>[0]) => result.mutants.find((m) => m.num === at(fn).num)!;
   return { result, log, events, verdict };
 }
+
+/** The tests the isolated runs tried a mutant against, in the order first planned. */
+const isolatedPlan = (log: { runs: Array<{ mode: string; plan?: Record<string, Array<{ m: number }>> }> }, m: number) => [
+  ...new Set(log.runs.filter((r) => r.mode === 'static').flatMap((r) => Object.entries(r.plan ?? {}).filter(([, l]) => l.some((t) => t.m === m)).map(([id]) => id))),
+];
 
 const statuses = (r: AnalysisResult) => Object.fromEntries(r.mutants.map((m) => [m.original, m.status]));
 
@@ -135,6 +143,60 @@ describe('the warm engine', () => {
     expect(log.sessions.some((s) => s.isolate)).toBe(true);
   });
 
+  describe('confirming a warm survivor', () => {
+    // add is covered by a1, whose file reaches no module state, and s1, whose file does.
+    const mixed = (s: Partial<Script> = {}): Script => ({
+      tests: [
+        { id: 'a1', file: 'test/a.test.js', hits: [at('add').site] },
+        { id: 's1', file: 'test/s.test.js', hits: [at('add').site] },
+      ],
+      ...s,
+    });
+
+    it('re-runs every covering test when one can reach module state (auto)', async () => {
+      const { verdict, log, events } = await run(mixed(), { verifySurvivors: 'auto' });
+      expect(events).toContainEqual({ type: 'info', message: 'confirming 1 warm survivors in isolation' });
+      expect(isolatedPlan(log, at('add').num).sort()).toEqual(['a1', 's1']);
+      expect(verdict('add')).toMatchObject({ status: 'Survived', coveredBy: ['pkg::a1', 'pkg::s1'], testsCompleted: 2 });
+    });
+
+    it('keeps a kill the isolated run finds: a warm survival masked by state', async () => {
+      const { verdict } = await run(mixed({ outcome: (t, m, mode) => (t === 's1' && m === at('add').num && mode === 'static' ? 'K' : 'S') }), { verifySurvivors: 'auto' });
+      expect(verdict('add')).toMatchObject({ status: 'Killed', killedBy: ['pkg::s1'], coveredBy: ['pkg::a1', 'pkg::s1'] });
+    });
+
+    it('re-runs every covering test when asked to verify all survivors', async () => {
+      const { log, verdict } = await run({ tests: [{ id: 'a1', file: 'test/a.test.js', hits: [at('add').site] }, { id: 'b1', file: 'test/b.test.js', hits: [at('add').site] }] }, { verifySurvivors: true });
+      expect(isolatedPlan(log, at('add').num).sort()).toEqual(['a1', 'b1']);
+      expect(verdict('add').status).toBe('Survived');
+    });
+
+    it('with verification off, runs in isolation only the tests the warm engine could not try', async () => {
+      // 0.1.1 re-ran every covering test here: --verify-survivors off still paid for a full confirmation.
+      const script = mixed({
+        tests: [
+          { id: 'a1', file: 'test/a.test.js', hits: [at('add').site] },
+          { id: 's1', file: 'test/s.test.js', hits: [at('add').site] },
+          { id: 'b1', file: 'test/b.test.js', hits: [at('add').site], stateSensitive: 'fails when repeated' },
+        ],
+      });
+      const quiet = await run(script, { verifySurvivors: false });
+      expect(isolatedPlan(quiet.log, at('add').num)).toEqual(['b1']);
+      // The run loads only the file it needs.
+      expect(quiet.log.runs.filter((r) => r.mode === 'static').flatMap((r) => r.files!.map((f) => path.basename(f)))).toEqual(['b.test.js']);
+      expect(quiet.verdict('add')).toMatchObject({ status: 'Survived', coveredBy: ['pkg::a1', 'pkg::b1', 'pkg::s1'], testsCompleted: 3 });
+      // The test it could not try still decides: a kill there is a kill.
+      const killed = await run({ ...script, outcome: (t, m, mode) => (t === 'b1' && m === at('add').num && mode === 'static' ? 'K' : 'S') }, { verifySurvivors: false });
+      expect(killed.verdict('add')).toMatchObject({ status: 'Killed', killedBy: ['pkg::b1'] });
+    });
+
+    it('needs no isolated run when every covering test was tried warm and none reaches state (auto)', async () => {
+      const { log, verdict } = await run({ tests: [{ id: 'a1', file: 'test/a.test.js', hits: [at('add').site] }] }, { verifySurvivors: 'auto' });
+      expect(log.runs.some((r) => r.mode === 'static')).toBe(false);
+      expect(verdict('add').status).toBe('Survived');
+    });
+  });
+
   it('decides mutants only state-sensitive tests cover in isolation', async () => {
     const { verdict, events } = await run({
       tests: [{ id: 'a1', file: 'test/a.test.js', hits: [at('add').site], stateSensitive: 'fails when repeated' }],
@@ -215,6 +277,64 @@ describe('the isolated path', () => {
     const first = log.runs.find((r) => r.mode === 'static')!;
     // One run activates mul in one file and div in the other.
     expect(Object.values(first.staticPlan!).sort()).toEqual([at('mul').num, at('div').num].sort());
+  });
+
+  describe('a static mutant that survives its first file', () => {
+    // mul runs while every file loads. a1 and s1 call into math.js at runtime (they reach add);
+    // b1 and c1 only load it.
+    const spread = (s: Partial<Script> = {}): Script => ({
+      tests: [
+        { id: 'a1', file: 'test/a.test.js', hits: [at('add').site] },
+        { id: 's1', file: 'test/s.test.js', hits: [at('add').site] },
+        { id: 'b1', file: 'test/b.test.js', hits: [] },
+        { id: 'c1', file: 'test/c.test.js', hits: [] },
+      ],
+      staticHits: { 'test/a.test.js': [at('mul').site], 'test/s.test.js': [at('mul').site], 'test/b.test.js': [at('mul').site], 'test/c.test.js': [at('mul').site] },
+      staticPerFile: true,
+      isolatesFiles: true,
+      ...s,
+    });
+    /** The files each static run loaded with mul active, run by run. */
+    const mulRuns = (log: { runs: Array<{ mode: string; files?: string[]; staticPlan?: Record<string, number> }> }) =>
+      log.runs
+        .filter((r) => r.mode === 'static')
+        .map((r) => Object.entries(r.staticPlan ?? {}).filter(([, m]) => m === at('mul').num).map(([f]) => path.basename(f)).sort())
+        .filter((fs) => fs.length > 0);
+
+    it('is tried next in the files whose tests call into its module, and stops there when they kill it', async () => {
+      const { verdict, log } = await run(spread({ outcome: (t, m, mode) => (t === 's1' && m === at('mul').num && mode === 'static' ? 'K' : 'S') }));
+      expect(verdict('mul')).toMatchObject({ status: 'Killed', killedBy: ['pkg::s1'], static: true });
+      expect(mulRuns(log)).toEqual([['a.test.js'], ['s.test.js']]);
+    });
+
+    it('survives only once every file that loads it has run with it active', async () => {
+      const { verdict, log, events } = await run(spread());
+      expect(mulRuns(log)).toEqual([['a.test.js'], ['s.test.js'], ['b.test.js', 'c.test.js']]);
+      expect(events).toContainEqual({ type: 'info', message: 'static mutants, wave 2: 1 not killed yet, 2 test file runs' });
+      expect(verdict('mul')).toMatchObject({ status: 'Survived', coveredBy: ['pkg::a1', 'pkg::b1', 'pkg::c1', 'pkg::s1'] });
+    });
+
+    it('goes through the files that call into its module in growing waves, those reaching most of it first', async () => {
+      // Ten more files call into math.js: m0 reaches add, sub and div; the others add only.
+      const callers = Array.from({ length: 10 }, (_, i) => `m${i}`);
+      for (const id of callers) writeFileSync(path.join(root, `test/${id}.test.js`), `import * as m from '../src/math.js';\n`);
+      const script = spread();
+      script.tests.push(...callers.map((id) => ({ id, file: `test/${id}.test.js`, hits: id === 'm0' ? [at('add').site, at('sub').site, at('div').site] : [at('add').site] })));
+      for (const id of callers) script.staticHits![`test/${id}.test.js`] = [at('mul').site];
+      const { log } = await run(script);
+      const waves = mulRuns(log);
+      // m0 reaches most of math.js: it is the first pass, alone. Then eight of the other eleven
+      // files that call in, the last three, and the two that only load the module.
+      expect(waves.map((w) => w.length)).toEqual([1, 8, 3, 2]);
+      expect(waves[0]).toEqual(['m0.test.js']);
+      expect(waves[3]).toEqual(['b.test.js', 'c.test.js']);
+      expect(waves.flat().sort()).toEqual(['a.test.js', 'b.test.js', 'c.test.js', ...callers.map((id) => `${id}.test.js`), 's.test.js'].sort());
+    });
+
+    it('is still killed by a test that only loads its module', async () => {
+      const { verdict } = await run(spread({ outcome: (t, m, mode) => (t === 'c1' && m === at('mul').num && mode === 'static' ? 'K' : 'S') }));
+      expect(verdict('mul')).toMatchObject({ status: 'Killed', killedBy: ['pkg::c1'] });
+    });
   });
 
   it('credits unhandled errors in a packed run to the mutant of the file they name', async () => {

@@ -39,8 +39,8 @@ export async function warmEngine(run: EngineRun, covered: Pending[]): Promise<Is
   const fallback: IsolatedMutant[] = [];
   let round = 0;
   let verifying = 0;
-  const toFallback = (p: Pending) => {
-    fallback.push({ d: p.d, tests: p.tests });
+  const toFallback = (p: Pending, confirm?: string[]) => {
+    fallback.push({ d: p.d, tests: p.tests, ...(confirm ? { confirm } : {}) });
     results.set(p.d.num, { ...p.d, status: 'Pending' });
   };
   for (const p of covered) if (p.warm.length === 0) toFallback(p);
@@ -99,13 +99,21 @@ export async function warmEngine(run: EngineRun, covered: Pending[]): Promise<Is
     return true;
   };
   const survive = (p: Pending) => {
-    // Survived every test the warm engine could trust. Confirmed in isolation unless told not
-    // to; covered by state-sensitive tests too, it always is.
-    const verify = options.verifySurvivors === true || (options.verifySurvivors !== false && p.tests.some((k) => tests.get(k)?.stateful !== false));
-    if (p.warm.length < p.tests.length || verify) {
+    // Survived every test the warm engine could trust. Confirmed in isolation, against every
+    // covering test, unless told not to; covered by state-sensitive tests too, those are run in
+    // isolation all the same, since no warm try decided them. Told not to verify, the warm tries
+    // stand and only those tests run: re-running the rest would be the verification declined.
+    const confirm = toConfirm(p);
+    if (confirm.length > 0) {
       verifying++;
-      toFallback(p);
+      toFallback(p, confirm.length < p.tests.length ? confirm : undefined);
     } else results.set(p.d.num, { ...p.d, status: 'Survived', coveredBy: p.tests, testsCompleted: p.completed });
+  };
+  const toConfirm = (p: Pending): string[] => {
+    const verify = options.verifySurvivors === true || (options.verifySurvivors !== false && p.tests.some((k) => tests.get(k)?.stateful !== false));
+    if (verify) return p.tests;
+    const triedWarm = new Set(p.warm);
+    return p.tests.filter((k) => !triedWarm.has(k));
   };
   const redo = new Map<number, { p: Pending; tests: Set<string> }>();
   const settle = (p: Pending, r: Round, done: boolean) => {

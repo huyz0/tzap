@@ -188,8 +188,13 @@ round resolves none of them, and then in isolation.
 **Isolated runs.** A static mutant — reached while a module evaluates — is active from before any
 module loads, in a session whose runner gives every test file fresh modules; every test of every
 file that loads the module judges it. Mutants whose files do not overlap share a run where the
-runner can activate a different mutant per file. A warm survivor whose tests can reach mutable
-module state is confirmed the same way (`--verify-survivors`).
+runner can activate a different mutant per file. A static mutant runs first in its likeliest
+file, then in waves of 8, 32, 128, ... of the files whose tests call into its module at runtime
+(those reaching most of it first), and only then in every other file that loads it: a survivor
+has run in all of them, a kill ends its waves. A warm survivor whose tests can reach mutable
+module state is confirmed the same way against every covering test (`--verify-survivors`); with
+`off`, only the covering tests the warm engine could not try (state-sensitive ones) run in
+isolation.
 
 **Hangs, deterministically.** Primary signal: the active mutant's hit count exceeding 100 x its
 baseline, and loop back-edges exceeding 10 x the unmutated run's count (each with a floor). The

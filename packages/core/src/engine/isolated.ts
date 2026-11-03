@@ -23,6 +23,10 @@ interface Item {
   isStatic: boolean;
   files: Map<string, Set<string>>; // package id -> normPath'd test files
   coveredBy: Set<string>;
+  /** The tests that judge the mutant here: its covering tests, or the part a confirmation re-runs. */
+  judgedBy: Set<string>;
+  /** Covering tests that already decided the mutant warm, and are not run again. */
+  decidedWarm: number;
   killedBy?: string;
   message?: string;
   timeout: boolean;
@@ -50,7 +54,7 @@ export async function isolatedRuns(run: EngineRun, list: IsolatedMutant[], fresh
   const items = list
     .slice()
     .sort((a, b) => a.d.num - b.d.num)
-    .map(({ d, tests }) => itemFor(run, d, tests));
+    .map(({ d, tests, confirm }) => itemFor(run, d, tests, confirm));
 
   // Green tests by package and normalised file, in discovery order.
   const testsByFile = new Map<string, TestRecord[]>();
@@ -91,26 +95,35 @@ export async function isolatedRuns(run: EngineRun, list: IsolatedMutant[], fresh
       if (mine.length > 0) await runJobs(run, mine, fresh, runJob);
     }
   };
-  const [firstPass, secondPass] = passes(run, items, testsByFile, fresh);
-  await runByPackage(buildJobs(firstPass));
-  // The second pass: the static mutants the first did not kill, in the rest of their files.
-  const survivors = secondPass.filter((p) => !p.it.killedBy);
-  if (survivors.length > 0) await runByPackage(buildJobs(survivors));
+  // Each pass after the first holds only the static mutants no earlier pass killed.
+  for (const [i, pass] of passes(run, items, testsByFile, fresh).entries()) {
+    const alive = pass.filter((p) => !p.it.killedBy);
+    if (alive.length === 0) continue;
+    // Each of these runs once per file it reaches: in a module the whole suite loads, a run of
+    // most of the suite per mutant. Said, so a long isolated phase is not a silent one.
+    if (i > 0) {
+      const runs = alive.reduce((n, p) => n + [...p.files.values()].reduce((a, f) => a + f.size, 0), 0);
+      run.emit({ type: 'info', message: `static mutants, wave ${i}: ${alive.length} not killed yet, ${runs} test file runs` });
+    }
+    await runByPackage(buildJobs(alive));
+  }
 
   for (const it of items) run.results.set(it.d.num, verdict(it));
   run.emit({ type: 'progress', decided: decidedCount(run), total: run.total });
 }
 
-/** The test files that could reach a mutant, and the tests that cover it. */
-function itemFor(run: EngineRun, d: MutantDescriptor, keys: string[]): Item {
+/**
+ * The test files that could reach a mutant, and the tests that cover it. A warm survivor's
+ * confirmation runs only the files of the tests it re-runs: no other file can change its verdict.
+ */
+function itemFor(run: EngineRun, d: MutantDescriptor, keys: string[], confirm?: string[]): Item {
   const isStatic = run.staticSites.has(d.site);
   const files = new Map<string, Set<string>>();
   const reaching = run.siteTests.get(d.site) ?? [];
-  for (const key of keys) {
-    const t = run.tests.get(key)!;
-    addTo(files, t.pkg, normPath(path.resolve(run.root, t.file)));
-  }
-  for (const t of reaching) addTo(files, t.pkg, normPath(path.resolve(run.root, t.file)));
+  const confirming = confirm !== undefined && !isStatic;
+  const fileOf = (t: TestRecord) => addTo(files, t.pkg, normPath(path.resolve(run.root, t.file)));
+  for (const key of confirming ? confirm : keys) fileOf(run.tests.get(key)!);
+  if (!confirming) for (const t of reaching) fileOf(t);
   if (isStatic) {
     for (const key of run.staticSites.get(d.site)!) {
       const [pkgId, file] = key.split('\0') as [string, string];
@@ -121,39 +134,75 @@ function itemFor(run: EngineRun, d: MutantDescriptor, keys: string[]): Item {
   for (const t of reaching) coveredBy.add(t.key);
   // A static mutant is judged by every test of the files that load it.
   if (isStatic) for (const k of run.staticRan(d)) coveredBy.add(k);
-  return { d, isStatic, files, coveredBy, timeout: false, tested: 0, planned: 0 };
+  const judgedBy = confirming ? new Set(confirm) : coveredBy;
+  return { d, isStatic, files, coveredBy, judgedBy, decidedWarm: confirming ? coveredBy.size - judgedBy.size : 0, timeout: false, tested: 0, planned: 0 };
 }
+
+/** The first wave of a static mutant's files that call into its module, and how each next one grows. */
+const FIRST_WAVE = 8;
+const WAVE_GROWTH = 4;
 
 /**
  * A static mutant is live in every file that loads its module, and any one of them failing kills
  * it; most static mutants break loading outright. So in a warm run each is first tried in one
- * file, its likeliest killer, and only the survivors in the rest. Different mutants take
- * different files where they can, so the first pass packs into few runs; the second pass is for
- * the survivors only. The reference engine keeps one pass.
+ * file, its likeliest killer. Different mutants take different files where they can, so the first
+ * pass packs into few runs.
+ *
+ * A survivor of the first pass must still run in every other file that loads its module before it
+ * can be called a survivor, and in a module the whole suite imports that is most of the suite, once
+ * per mutant. So the rest come in waves, each a pass of its own for the mutants no earlier pass
+ * killed: first the files whose tests call into the mutant's own module at runtime, the ones that
+ * use what it computed while loading, those reaching most of the module first, in waves of 8, 32,
+ * 128, ... files; then every other file that loads it. A kill ends a mutant's waves; a survivor
+ * runs in every file, as before. The reference engine keeps one pass.
  */
-function passes(run: EngineRun, items: Item[], testsByFile: Map<string, TestRecord[]>, fresh: boolean): [Parts, Parts] {
-  const first: Parts = [];
-  const second: Parts = [];
+function passes(run: EngineRun, items: Item[], testsByFile: Map<string, TestRecord[]>, fresh: boolean): Parts[] {
+  const out: Parts[] = [[]];
   const fileClass = new Map<string, number>();
   for (const [k, ts] of testsByFile) fileClass.set(k, speedClass(ts.reduce((a, t) => a + (t.duration ?? 0), 0)));
   const used = new Set<string>();
+  /** Per source file: how many of its sites each test file (`pkgId\0normPath`) reaches at runtime. */
+  const callers = new Map<string, Map<string, number>>();
+  const callersOf = (source: string) => {
+    let reach = callers.get(source);
+    if (reach) return reach;
+    callers.set(source, (reach = new Map()));
+    for (const [site, ts] of run.siteTests) {
+      if (run.siteFile.get(site) !== source) continue;
+      for (const k of new Set(ts.map((t) => `${t.pkg}\0${normPath(path.resolve(run.root, t.file))}`))) reach.set(k, (reach.get(k) ?? 0) + 1);
+    }
+    return reach;
+  };
+  const add = (pass: number, it: Item, xs: Array<{ pkgId: string; f: string }>) => {
+    const files = new Map<string, Set<string>>();
+    for (const x of xs) addTo(files, x.pkgId, x.f);
+    (out[pass] ??= []).push({ it, files });
+  };
   for (const it of items) {
     const all = [...it.files].flatMap(([pkgId, fs]) => [...fs].map((f) => ({ pkgId, f, k: `${pkgId}\0${f}` })));
     if (fresh || !it.isStatic || all.length < 2 || !all.every((x) => run.staticPerFile.has(x.pkgId))) {
-      first.push({ it, files: it.files });
+      out[0]!.push({ it, files: it.files });
       continue;
     }
     const inBody = new Set((run.siteTests.get(it.d.site) ?? []).map((t) => `${t.pkg}\0${normPath(path.resolve(run.root, t.file))}`));
-    const rank = (x: { k: string }) => [inBody.has(x.k) ? 0 : 1, fileClass.get(x.k) ?? 0] as const;
-    all.sort((a, b) => rank(a)[0] - rank(b)[0] || rank(a)[1] - rank(b)[1] || (a.k < b.k ? -1 : 1));
+    const calls = callersOf(it.d.file);
+    const rank = (x: { k: string }) => [inBody.has(x.k) ? 0 : calls.has(x.k) ? 1 : 2, -(calls.get(x.k) ?? 0), fileClass.get(x.k) ?? 0] as const;
+    const order = (a: { k: string }, b: { k: string }) => {
+      const [ra, rb] = [rank(a), rank(b)];
+      return ra[0] - rb[0] || ra[1] - rb[1] || ra[2] - rb[2] || (a.k < b.k ? -1 : 1);
+    };
+    all.sort(order);
     const pick = all.find((x) => !used.has(x.k)) ?? all[0]!;
     used.add(pick.k);
-    const rest = new Map<string, Set<string>>();
-    for (const x of all) if (x !== pick) addTo(rest, x.pkgId, x.f);
-    first.push({ it, files: new Map([[pick.pkgId, new Set([pick.f])]]) });
-    second.push({ it, files: rest });
+    add(0, it, [pick]);
+    const rest = all.filter((x) => x !== pick);
+    const near = rest.filter((x) => rank(x)[0] < 2);
+    let pass = 1;
+    for (let at = 0, size = FIRST_WAVE; at < near.length; at += size, size *= WAVE_GROWTH) add(pass++, it, near.slice(at, at + size));
+    const far = rest.filter((x) => rank(x)[0] === 2);
+    if (far.length > 0) add(pass, it, far);
   }
-  return [first, second];
+  return out;
 }
 
 async function runIsolatedJob(run: EngineRun, job: Job, lane: Lane, testsByFile: Map<string, TestRecord[]>, items: Item[]): Promise<void> {
@@ -168,7 +217,7 @@ async function runIsolatedJob(run: EngineRun, job: Job, lane: Lane, testsByFile:
     // Any other mutant is judged by the tests that reach it, and the worker skips the tests after
     // the last of those.
     const all = testsByFile.get(`${job.pkgId}\0${f}`) ?? [];
-    const ts = it.isStatic ? all : all.filter((t) => it.coveredBy.has(t.key));
+    const ts = it.isStatic ? all : all.filter((t) => it.judgedBy.has(t.key));
     if (ts.length === 0) continue;
     staticPlan[f] = it.d.num;
     files.push(path.resolve(run.root, ts[0]!.file));
@@ -342,7 +391,7 @@ async function runJobs(run: EngineRun, jobs: Job[], fresh: boolean, runJob: (job
 }
 
 function verdict(it: Item): MutantResult {
-  const base: MutantResult = { ...it.d, status: 'Survived', coveredBy: [...it.coveredBy].sort(), testsCompleted: it.tested, ...(it.isStatic ? { static: true } : {}) };
+  const base: MutantResult = { ...it.d, status: 'Survived', coveredBy: [...it.coveredBy].sort(), testsCompleted: it.tested + it.decidedWarm, ...(it.isStatic ? { static: true } : {}) };
   if (it.timeout) return { ...base, status: 'Timeout', statusReason: it.message ?? 'declared hung', killedBy: it.killedBy ? [it.killedBy] : [] };
   if (it.killedBy) return { ...base, status: 'Killed', statusReason: it.message, killedBy: [it.killedBy] };
   if (it.planned === 0) return { ...base, status: 'NoCoverage', statusReason: 'no passing test reaches it' };

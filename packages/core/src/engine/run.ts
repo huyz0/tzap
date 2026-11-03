@@ -35,6 +35,12 @@ export interface Pending {
 export interface IsolatedMutant {
   d: MutantDescriptor;
   tests: string[];
+  /**
+   * A warm survivor's confirmation: the covering tests to run again in isolation. Every other
+   * covering test already decided the mutant warm, in a try the engine trusts. Absent: the warm
+   * engine decided nothing, and every covering test runs.
+   */
+  confirm?: string[];
 }
 
 /** What the execution phases share: the coverage run's facts, the sessions, and the verdicts. */
@@ -75,6 +81,8 @@ export interface EngineRun {
   silenceMs: number;
   /** Placed mutants: the progress total. */
   total: number;
+  /** The source file (root-relative) each placed mutant's site is in. */
+  siteFile: Map<number, string>;
 }
 
 /** Mutants with a verdict; one waiting for its isolated run is not decided yet. */
