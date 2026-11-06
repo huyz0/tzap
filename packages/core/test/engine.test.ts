@@ -331,6 +331,61 @@ describe('the isolated path', () => {
       expect(waves.flat().sort()).toEqual(['a.test.js', 'b.test.js', 'c.test.js', ...callers.map((id) => `${id}.test.js`), 's.test.js'].sort());
     });
 
+    it('is tried first in the test file named for its module, even when other static mutants are tried there too', async () => {
+      // math.test.js is named for src/math.js. Two static mutants, mul and div, load in a, b and
+      // math; only math's test kills them. Spreading the mutants over unused files would give one
+      // of them a, a far weaker first try.
+      writeFileSync(path.join(root, 'test/math.test.js'), `import * as m from '../src/math.js';\n`);
+      const script: Script = {
+        tests: [
+          { id: 'a1', file: 'test/a.test.js', hits: [at('add').site] },
+          { id: 'b1', file: 'test/b.test.js', hits: [at('add').site] },
+          { id: 't1', file: 'test/math.test.js', hits: [] },
+        ],
+        staticHits: {
+          'test/a.test.js': [at('mul').site, at('div').site],
+          'test/b.test.js': [at('mul').site, at('div').site],
+          'test/math.test.js': [at('mul').site, at('div').site],
+        },
+        staticPerFile: true,
+        isolatesFiles: true,
+        outcome: (t, m, mode) => (t === 't1' && mode === 'static' && (m === at('mul').num || m === at('div').num) ? 'K' : 'S'),
+      };
+      const { verdict, log } = await run(script);
+      expect(verdict('mul')).toMatchObject({ status: 'Killed', killedBy: ['pkg::t1'] });
+      expect(verdict('div')).toMatchObject({ status: 'Killed', killedBy: ['pkg::t1'] });
+      // Each was first tried in math.test.js, and never needed another file.
+      const files = (m: number) =>
+        log.runs.filter((r) => r.mode === 'static').flatMap((r) => Object.entries(r.staticPlan ?? {}).filter(([, n]) => n === m).map(([f]) => path.basename(f)));
+      expect(files(at('mul').num)).toEqual(['math.test.js']);
+      expect(files(at('div').num)).toEqual(['math.test.js']);
+    });
+
+    it('is tried first in the test file named for its module when other files reach it too', async () => {
+      // mul and div run while a, b and math load, and the tests of all three call them too. Only
+      // math's test kills them; it still comes first, ahead of the files the other mutant left unused.
+      writeFileSync(path.join(root, 'test/math.test.js'), `import * as m from '../src/math.js';\n`);
+      const both = [at('mul').site, at('div').site];
+      const script: Script = {
+        tests: [
+          { id: 'a1', file: 'test/a.test.js', hits: both },
+          { id: 'b1', file: 'test/b.test.js', hits: both },
+          { id: 't1', file: 'test/math.test.js', hits: both },
+        ],
+        staticHits: { 'test/a.test.js': both, 'test/b.test.js': both, 'test/math.test.js': both },
+        staticPerFile: true,
+        isolatesFiles: true,
+        outcome: (t, m, mode) => (t === 't1' && mode === 'static' && (m === at('mul').num || m === at('div').num) ? 'K' : 'S'),
+      };
+      const { verdict, log } = await run(script);
+      expect(verdict('mul')).toMatchObject({ status: 'Killed', killedBy: ['pkg::t1'] });
+      expect(verdict('div')).toMatchObject({ status: 'Killed', killedBy: ['pkg::t1'] });
+      const files = (m: number) =>
+        log.runs.filter((r) => r.mode === 'static').flatMap((r) => Object.entries(r.staticPlan ?? {}).filter(([, n]) => n === m).map(([f]) => path.basename(f)));
+      expect(files(at('mul').num)).toEqual(['math.test.js']);
+      expect(files(at('div').num)).toEqual(['math.test.js']);
+    });
+
     it('is still killed by a test that only loads its module', async () => {
       const { verdict } = await run(spread({ outcome: (t, m, mode) => (t === 'c1' && m === at('mul').num && mode === 'static' ? 'K' : 'S') }));
       expect(verdict('mul')).toMatchObject({ status: 'Killed', killedBy: ['pkg::c1'] });

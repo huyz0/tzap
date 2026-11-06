@@ -138,6 +138,16 @@ function itemFor(run: EngineRun, d: MutantDescriptor, keys: string[], confirm?: 
   return { d, isStatic, files, coveredBy, judgedBy, decidedWarm: confirming ? coveredBy.size - judgedBy.size : 0, timeout: false, tested: 0, planned: 0 };
 }
 
+/** A source file's name without its extension: `src/shape/svg-geometry.ts` gives `svg-geometry`. */
+function sourceStem(file: string): string {
+  return path.basename(file).replace(/\.[^.]+$/, '');
+}
+
+/** The source a test file is named for: `svg-geometry.test.ts` and `svg-geometry.spec.js` give `svg-geometry`. */
+function testStem(file: string): string | undefined {
+  return /^(.+?)\.(?:test|spec)\.[^.]+$/.exec(path.basename(file))?.[1];
+}
+
 /** The first wave of a static mutant's files that call into its module, and how each next one grows. */
 const FIRST_WAVE = 8;
 const WAVE_GROWTH = 4;
@@ -145,8 +155,11 @@ const WAVE_GROWTH = 4;
 /**
  * A static mutant is live in every file that loads its module, and any one of them failing kills
  * it; most static mutants break loading outright. So in a warm run each is first tried in one
- * file, its likeliest killer. Different mutants take different files where they can, so the first
- * pass packs into few runs.
+ * file, its likeliest killer: the test file named for the module when its tests reach the mutated
+ * code, else that file or one whose tests reach the code, else the files calling into the module
+ * most. Different mutants take different files where they can, so the first pass packs into few
+ * runs, but only among files as likely as the best: a table-heavy module's mutants belong in its
+ * own test file, not spread to weak importers.
  *
  * A survivor of the first pass must still run in every other file that loads its module before it
  * can be called a survivor, and in a module the whole suite imports that is most of the suite, once
@@ -186,20 +199,30 @@ function passes(run: EngineRun, items: Item[], testsByFile: Map<string, TestReco
     }
     const inBody = new Set((run.siteTests.get(it.d.site) ?? []).map((t) => `${t.pkg}\0${normPath(path.resolve(run.root, t.file))}`));
     const calls = callersOf(it.d.file);
-    const rank = (x: { k: string }) => [inBody.has(x.k) ? 0 : calls.has(x.k) ? 1 : 2, -(calls.get(x.k) ?? 0), fileClass.get(x.k) ?? 0] as const;
-    const order = (a: { k: string }, b: { k: string }) => {
+    const stem = sourceStem(it.d.file);
+    const rank = (x: { k: string; f: string }) =>
+      [
+        inBody.has(x.k) && testStem(x.f) === stem ? 0 : inBody.has(x.k) || testStem(x.f) === stem ? 1 : calls.has(x.k) ? 2 : 3,
+        -(calls.get(x.k) ?? 0),
+        fileClass.get(x.k) ?? 0,
+      ] as const;
+    const order = (a: { k: string; f: string }, b: { k: string; f: string }) => {
       const [ra, rb] = [rank(a), rank(b)];
       return ra[0] - rb[0] || ra[1] - rb[1] || ra[2] - rb[2] || (a.k < b.k ? -1 : 1);
     };
     all.sort(order);
-    const pick = all.find((x) => !used.has(x.k)) ?? all[0]!;
+    // Mutants spread over files so that one run can hold several, but never past the best class:
+    // a static mutant whose module has its own test file is first tried there, however many
+    // other mutants are, rather than in an unused file far less likely to kill it.
+    const best = rank(all[0]!)[0];
+    const pick = all.find((x) => !used.has(x.k) && rank(x)[0] === best) ?? all[0]!;
     used.add(pick.k);
     add(0, it, [pick]);
     const rest = all.filter((x) => x !== pick);
-    const near = rest.filter((x) => rank(x)[0] < 2);
+    const near = rest.filter((x) => rank(x)[0] < 3);
     let pass = 1;
     for (let at = 0, size = FIRST_WAVE; at < near.length; at += size, size *= WAVE_GROWTH) add(pass++, it, near.slice(at, at + size));
-    const far = rest.filter((x) => rank(x)[0] === 2);
+    const far = rest.filter((x) => rank(x)[0] === 3);
     if (far.length > 0) add(pass, it, far);
   }
   return out;
