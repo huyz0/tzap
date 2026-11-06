@@ -28,7 +28,7 @@ import { widenScope } from './scope.js';
 
 const reporterNames = Object.keys(reporterRegistry);
 
-export const VERSION = '0.1.3';
+export const VERSION = '0.1.4';
 
 class UsageError extends Error {}
 

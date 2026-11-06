@@ -386,6 +386,31 @@ describe('the isolated path', () => {
       expect(files(at('div').num)).toEqual(['math.test.js']);
     });
 
+    it('is tried first in the test file named for its module, even when other files reach it at runtime and it does not', async () => {
+      // A test that imports a module inside its body reaches the module's load-time code; a and b
+      // do, math only loads it. math's test is still the one written for the module, and kills.
+      writeFileSync(path.join(root, 'test/math.test.js'), `import * as m from '../src/math.js';\n`);
+      const both = [at('mul').site, at('div').site];
+      const script: Script = {
+        tests: [
+          { id: 'a1', file: 'test/a.test.js', hits: both },
+          { id: 'b1', file: 'test/b.test.js', hits: both },
+          { id: 't1', file: 'test/math.test.js', hits: [] },
+        ],
+        staticHits: { 'test/a.test.js': both, 'test/b.test.js': both, 'test/math.test.js': both },
+        staticPerFile: true,
+        isolatesFiles: true,
+        outcome: (t, m, mode) => (t === 't1' && mode === 'static' && (m === at('mul').num || m === at('div').num) ? 'K' : 'S'),
+      };
+      const { verdict, log } = await run(script);
+      expect(verdict('mul')).toMatchObject({ status: 'Killed', killedBy: ['pkg::t1'] });
+      expect(verdict('div')).toMatchObject({ status: 'Killed', killedBy: ['pkg::t1'] });
+      const files = (m: number) =>
+        log.runs.filter((r) => r.mode === 'static').flatMap((r) => Object.entries(r.staticPlan ?? {}).filter(([, n]) => n === m).map(([f]) => path.basename(f)));
+      expect(files(at('mul').num)).toEqual(['math.test.js']);
+      expect(files(at('div').num)).toEqual(['math.test.js']);
+    });
+
     it('is still killed by a test that only loads its module', async () => {
       const { verdict } = await run(spread({ outcome: (t, m, mode) => (t === 'c1' && m === at('mul').num && mode === 'static' ? 'K' : 'S') }));
       expect(verdict('mul')).toMatchObject({ status: 'Killed', killedBy: ['pkg::c1'] });

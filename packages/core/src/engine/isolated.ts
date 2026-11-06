@@ -155,9 +155,9 @@ const WAVE_GROWTH = 4;
 /**
  * A static mutant is live in every file that loads its module, and any one of them failing kills
  * it; most static mutants break loading outright. So in a warm run each is first tried in one
- * file, its likeliest killer: the test file named for the module when its tests reach the mutated
- * code, else that file or one whose tests reach the code, else the files calling into the module
- * most. Different mutants take different files where they can, so the first pass packs into few
+ * file, its likeliest killer: the test file named for the module, else one whose tests reach the
+ * mutated code (a test that imports the module inside its body reaches its load-time code too),
+ * else the files calling into the module most. Different mutants take different files where they can, so the first pass packs into few
  * runs, but only among files as likely as the best: a table-heavy module's mutants belong in its
  * own test file, not spread to weak importers.
  *
@@ -202,7 +202,7 @@ function passes(run: EngineRun, items: Item[], testsByFile: Map<string, TestReco
     const stem = sourceStem(it.d.file);
     const rank = (x: { k: string; f: string }) =>
       [
-        inBody.has(x.k) && testStem(x.f) === stem ? 0 : inBody.has(x.k) || testStem(x.f) === stem ? 1 : calls.has(x.k) ? 2 : 3,
+        testStem(x.f) === stem ? 0 : inBody.has(x.k) ? 1 : calls.has(x.k) ? 2 : 3,
         -(calls.get(x.k) ?? 0),
         fileClass.get(x.k) ?? 0,
       ] as const;
